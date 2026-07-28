@@ -9,6 +9,26 @@ const roots: string[] = [];
 const FIRST_ID = "abcdefghijklmnopabcdefghijklmnop";
 const SECOND_ID = "ponmlkjihgfedcbaponmlkjihgfedcba";
 
+function managedExtensionPath(home: string): string {
+  if (process.platform === "linux") {
+    return path.join(home, ".local", "share", "browseweave", "extension", "chromium-mv3");
+  }
+  if (process.platform === "darwin") {
+    return path.join(
+      home,
+      "Library",
+      "Application Support",
+      "BrowseWeave",
+      "extension",
+      "chromium-mv3"
+    );
+  }
+  if (process.platform === "win32") {
+    return path.join(home, "AppData", "Local", "BrowseWeave", "extension", "chromium-mv3");
+  }
+  throw new Error(`Unsupported test operating system: ${process.platform}`);
+}
+
 afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await Promise.all(roots.splice(0).map(async (root) => await rm(root, { recursive: true, force: true })));
@@ -70,7 +90,7 @@ describe("local Chrome extension discovery", () => {
     const value = await fixture();
     await addProfile({ ...value, profile: "Default", id: FIRST_ID });
     await expect(discoverLocalChromiumExtensionOrigins({
-      platform: "linux",
+      platform: process.platform,
       home: value.home,
       chromeUserData: value.chrome,
       expectedExtensionPath: value.expected
@@ -79,14 +99,7 @@ describe("local Chrome extension discovery", () => {
 
   it("accepts the exact managed per-user extension path used by first-time setup", async () => {
     const value = await fixture();
-    const managed = path.join(
-      value.home,
-      ".local",
-      "share",
-      "browseweave",
-      "extension",
-      "chromium-mv3"
-    );
+    const managed = managedExtensionPath(value.home);
     await addProfile({
       ...value,
       profile: "Default",
@@ -94,7 +107,7 @@ describe("local Chrome extension discovery", () => {
       unpackedPath: managed
     });
     await expect(discoverLocalChromiumExtensionOrigins({
-      platform: "linux",
+      platform: process.platform,
       home: value.home,
       chromeUserData: value.chrome,
       expectedExtensionPath: value.expected
@@ -110,7 +123,7 @@ describe("local Chrome extension discovery", () => {
       unpackedPath: path.join(value.home, "Downloads", "BrowseWeave")
     });
     await expect(discoverLocalChromiumExtensionOrigins({
-      platform: "linux",
+      platform: process.platform,
       home: value.home,
       chromeUserData: value.chrome,
       expectedExtensionPath: value.expected
@@ -121,7 +134,7 @@ describe("local Chrome extension discovery", () => {
     const disabled = await fixture();
     await addProfile({ ...disabled, profile: "Default", id: FIRST_ID, disabled: true });
     await expect(discoverLocalChromiumExtensionOrigins({
-      platform: "linux",
+      platform: process.platform,
       home: disabled.home,
       chromeUserData: disabled.chrome,
       expectedExtensionPath: disabled.expected
@@ -130,7 +143,7 @@ describe("local Chrome extension discovery", () => {
     const modified = await fixture();
     await addProfile({ ...modified, profile: "Default", id: FIRST_ID, mutate: true });
     await expect(discoverLocalChromiumExtensionOrigins({
-      platform: "linux",
+      platform: process.platform,
       home: modified.home,
       chromeUserData: modified.chrome,
       expectedExtensionPath: modified.expected
@@ -142,7 +155,7 @@ describe("local Chrome extension discovery", () => {
     await addProfile({ ...value, profile: "Default", id: FIRST_ID });
     await addProfile({ ...value, profile: "Profile 1", id: SECOND_ID });
     await expect(discoverLocalChromiumExtensionOrigins({
-      platform: "linux",
+      platform: process.platform,
       home: value.home,
       chromeUserData: value.chrome,
       expectedExtensionPath: value.expected

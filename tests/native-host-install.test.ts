@@ -6,6 +6,12 @@ import { installNativeHostRegistration, uninstallNativeHostRegistration } from "
 import { createNativeHostRegistrationPlan } from "../src/native-host-plan.js";
 
 const roots: string[] = [];
+const describePosix = process.platform === "win32" ? describe.skip : describe;
+
+function currentPosixPlatform(): "linux" | "darwin" {
+  if (process.platform === "linux" || process.platform === "darwin") return process.platform;
+  throw new Error("The native host artifact installer tests require a POSIX platform.");
+}
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(async (root) => await rm(root, { recursive: true, force: true })));
@@ -15,7 +21,7 @@ async function harness() {
   const home = await mkdtemp(path.join(tmpdir(), "browseweave-native-install-"));
   roots.push(home);
   const plan = createNativeHostRegistrationPlan({
-    platform: "linux",
+    platform: currentPosixPlatform(),
     home,
     nodePath: "/usr/bin/node",
     nativeHostScriptPath: "/opt/browseweave/native-host.js",
@@ -24,7 +30,7 @@ async function harness() {
   return { home, plan };
 }
 
-describe("owner-safe native host artifact installation", () => {
+describePosix("owner-safe native host artifact installation", () => {
   it("installs an executable managed launcher and exact private Firefox manifest idempotently", async () => {
     const { home, plan } = await harness();
     await installNativeHostRegistration(plan, home);
@@ -40,7 +46,7 @@ describe("owner-safe native host artifact installation", () => {
     const { home, plan } = await harness();
     await installNativeHostRegistration(plan, home);
     const upgraded = createNativeHostRegistrationPlan({
-      platform: "linux",
+      platform: currentPosixPlatform(),
       home,
       nodePath: "/opt/browseweave-v2/node",
       nativeHostScriptPath: "/opt/browseweave-v2/native-host.js",
@@ -68,8 +74,25 @@ describe("owner-safe native host artifact installation", () => {
 
   it("refuses symlinked artifacts and directory components", async () => {
     const { home, plan } = await harness();
-    await symlink(tmpdir(), path.join(home, ".mozilla"));
+    const manifestDirectory = path.dirname(plan.manifests[0]!.path);
+    const firstComponent = path.relative(home, manifestDirectory).split(path.sep)[0];
+    if (!firstComponent) throw new Error("The native host manifest directory must stay below the test home.");
+    await symlink(tmpdir(), path.join(home, firstComponent));
     await expect(installNativeHostRegistration(plan, home)).rejects.toThrow(/not a real directory/iu);
+  });
+
+  it("rejects a plan created for a different operating system", async () => {
+    const { home } = await harness();
+    const foreignPlatform = currentPosixPlatform() === "linux" ? "darwin" : "linux";
+    const foreignPlan = createNativeHostRegistrationPlan({
+      platform: foreignPlatform,
+      home,
+      nodePath: "/usr/bin/node",
+      nativeHostScriptPath: "/opt/browseweave/native-host.js",
+      firefoxExtensionIds: ["browseweave@local.invalid"]
+    });
+
+    await expect(installNativeHostRegistration(foreignPlan, home)).rejects.toThrow(/does not match/iu);
   });
 
   it("uninstalls only exact manifests and an intact managed launcher", async () => {

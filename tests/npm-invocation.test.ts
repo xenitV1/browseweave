@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -118,7 +118,8 @@ describe("trusted npm invocation", () => {
         packageRoot,
         temporaryDirectory: path.join(root, "blocked-temporary-root")
       });
-      expect(trusted?.executable).toBe(path.join(safeBin, executableName));
+      const expectedExecutable = await realpath(path.join(safeBin, executableName));
+      expect(trusted?.executable).toBe(expectedExecutable);
       await expect(assertTrustedClientExecutableUnchanged(trusted!)).resolves.toBeUndefined();
 
       const fromHome = await resolveTrustedClientExecutable("codex", {
@@ -130,7 +131,7 @@ describe("trusted npm invocation", () => {
         packageRoot,
         temporaryDirectory: path.join(root, "blocked-temporary-root")
       });
-      expect(fromHome?.executable).toBe(path.join(safeBin, executableName));
+      expect(fromHome?.executable).toBe(expectedExecutable);
 
       await writeFile(path.join(safeBin, executableName), "replacement client with a new identity", "utf8");
       await expect(assertTrustedClientExecutableUnchanged(trusted!)).rejects.toThrow(/changed after it was selected/iu);
@@ -167,7 +168,7 @@ describe("trusted npm invocation", () => {
         home,
         temporaryDirectory: path.join(root, "blocked-temporary-root")
       });
-      expect(trusted?.executable).toBe(path.join(safeBin, "codex"));
+      expect(trusted?.executable).toBe(await realpath(path.join(safeBin, "codex")));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

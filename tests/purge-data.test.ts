@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,7 +12,8 @@ afterEach(async () => {
 });
 
 async function rootFixture(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "browseweave-purge-"));
+  const createdRoot = await mkdtemp(path.join(tmpdir(), "browseweave-purge-"));
+  const root = await realpath(createdRoot);
   roots.push(root);
   return root;
 }

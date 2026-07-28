@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -154,7 +154,15 @@ describe("bootstrap publish cleanup", () => {
         }
       }
       if (process.platform !== "win32") await chmod(unsafeBin, 0o777);
-      const pathValue = [projectBin, cacheBin, unsafeBin, safeBin].join(path.delimiter);
+      // POSIX mode bits make unsafeBin a meaningful negative control. Windows
+      // does not expose an equivalent chmod-based ACL fixture, so its PATH
+      // still proves that project and npm-cache binaries are excluded.
+      const pathValue = [
+        projectBin,
+        cacheBin,
+        ...(process.platform === "win32" ? [] : [unsafeBin]),
+        safeBin
+      ].join(path.delimiter);
       const environment: NodeJS.ProcessEnv = process.platform === "win32"
         ? { Path: pathValue, USERPROFILE: home, LOCALAPPDATA: path.join(home, "AppData", "Local"), INIT_CWD: project }
         : { PATH: pathValue, HOME: home, INIT_CWD: project };
@@ -165,7 +173,7 @@ describe("bootstrap publish cleanup", () => {
           packageRoot: project,
           temporaryDirectory: path.join(root, "blocked-temporary-root")
         });
-        expect(trusted.executable).toBe(path.join(safeBin, `${command}${extension}`));
+        expect(trusted.executable).toBe(await realpath(path.join(safeBin, `${command}${extension}`)));
         await expect(assertPinnedCommandUnchanged(trusted)).resolves.toBeUndefined();
       }
     } finally {

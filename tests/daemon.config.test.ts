@@ -12,6 +12,7 @@ import {
 import { PROTOCOL_VERSION } from "../src/protocol.js";
 
 const temporaryDirectories: string[] = [];
+const itPosix = process.platform === "win32" ? it.skip : it;
 
 afterEach(async () => {
   await Promise.all(
@@ -96,7 +97,7 @@ describe("daemon configuration and pure protocol helpers", () => {
     expect((await stat(auditPath)).size).toBeLessThanOrEqual(512);
   });
 
-  it("uses XDG locations on Linux with a private generated token", async () => {
+  itPosix("uses XDG locations on Linux with a private generated token", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "browseweave-config-"));
     temporaryDirectories.push(root);
     const env = {

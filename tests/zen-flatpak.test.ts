@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { configureZenFlatpakNativeMessaging } from "../src/zen-flatpak.js";
 
 const roots: string[] = [];
+const describeLinux = process.platform === "linux" ? describe : describe.skip;
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(async (root) => await rm(root, { recursive: true, force: true })));
@@ -30,7 +31,7 @@ async function fixture(): Promise<{ home: string; root: string; profile: string 
   return { home, root, profile };
 }
 
-describe("Zen Flatpak native-messaging portal configuration", () => {
+describeLinux("Zen Flatpak native-messaging portal configuration", () => {
   it("preserves other user preferences and enables the portal idempotently", async () => {
     const value = await fixture();
     const userJs = path.join(value.profile, "user.js");

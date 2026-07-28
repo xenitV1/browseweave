@@ -107,7 +107,9 @@ describe("one-click local setup page", () => {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       });
       expect(path.basename(ticket.path)).toBe("setup-ticket.json");
-      expect((await stat(ticket.path)).mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") {
+        expect((await stat(ticket.path)).mode & 0o777).toBe(0o600);
+      }
       expect(JSON.parse(await readFile(ticket.path, "utf8"))).toEqual({
         version: 1,
         setup_id: "a".repeat(24),
