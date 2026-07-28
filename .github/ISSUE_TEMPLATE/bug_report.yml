@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible BrowseWeave problem without private browsing data.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Never paste pairing/npm tokens, credentials, private page text, or private screenshots.
+  - type: input
+    id: version
+    attributes:
+      label: BrowseWeave version
+      placeholder: 0.1.0-beta.1
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Linux, macOS, Windows 11, Windows 10]
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: Zen 1.x or Chrome 1xx
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client and version
+      placeholder: Codex, Claude Code, Cursor, OpenCode, or another client
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use a public or local test page. Redact personal data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Include only non-sensitive output from browseweave doctor.

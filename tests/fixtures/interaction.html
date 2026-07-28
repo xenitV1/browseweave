@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Safe local interaction verification page for BrowseWeave">
+    <title>BrowseWeave Local Interaction Test</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #f4f7fb;
+        color: #17202a;
+        font: 16px/1.45 system-ui, sans-serif;
+      }
+      header, main { width: min(960px, calc(100% - 2rem)); margin-inline: auto; }
+      header { padding: 1.5rem 0 .75rem; }
+      main { display: grid; gap: 1rem; padding-bottom: 4rem; }
+      section {
+        background: white;
+        border: 1px solid #cad5e2;
+        border-radius: .75rem;
+        padding: 1rem;
+      }
+      h1, h2 { margin-top: 0; }
+      .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .85rem; }
+      .field { display: grid; gap: .3rem; }
+      input[type="text"], textarea, select {
+        width: 100%;
+        border: 1px solid #7d8fa3;
+        border-radius: .4rem;
+        padding: .55rem .65rem;
+        font: inherit;
+      }
+      fieldset { border: 1px solid #cad5e2; border-radius: .5rem; margin: .85rem 0 0; }
+      button, [tabindex="0"] { font: inherit; }
+      button {
+        border: 1px solid #245c93;
+        border-radius: .4rem;
+        background: #eaf3fc;
+        color: #153c63;
+        cursor: pointer;
+        padding: .55rem .75rem;
+      }
+      .actions { display: flex; flex-wrap: wrap; gap: .6rem; }
+      .status { min-height: 1.5rem; margin: .6rem 0 0; font-weight: 650; }
+      #hover-target {
+        display: inline-block;
+        border: 1px dashed #4a6b8c;
+        border-radius: .4rem;
+        padding: .6rem .75rem;
+      }
+      #hover-tip { margin: .5rem 0 0; color: #245c38; }
+      #scroll-region {
+        height: 120px;
+        overflow-y: auto;
+        border: 1px solid #7d8fa3;
+        border-radius: .4rem;
+        padding: .4rem .7rem;
+      }
+      #scroll-region:focus, #hover-target:focus { outline: 3px solid #79b8ff; outline-offset: 2px; }
+      iframe { width: 100%; min-height: 190px; border: 1px solid #7d8fa3; border-radius: .4rem; }
+      canvas {
+        display: block;
+        width: min(100%, 640px);
+        height: 180px;
+        border: 2px solid #395b7d;
+        border-radius: .5rem;
+        background: #eef5fb;
+      }
+      .muted { color: #526373; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>BrowseWeave safe interaction area</h1>
+      <p class="muted">This page is only for local bridge tests. It makes no network request, submission, payment, or persistent data change.</p>
+    </header>
+    <main>
+      <section aria-labelledby="form-title">
+        <h2 id="form-title">Ordinary fields</h2>
+        <form id="ordinary-form" action="/interaction.html" method="get" onsubmit="return false">
+          <div class="field-grid">
+            <label class="field" for="person-name">Name
+              <input id="person-name" name="person_name" type="text" autocomplete="off">
+            </label>
+            <label class="field" for="work-mode">Work mode
+              <select id="work-mode" name="work_mode">
+                <option value="solo">Solo</option>
+                <option value="team">Team</option>
+                <option value="hybrid">Hybrid</option>
+              </select>
+            </label>
+            <label class="field" for="short-note">Short note
+              <textarea id="short-note" name="short_note" rows="2"></textarea>
+            </label>
+          </div>
+          <fieldset>
+            <legend>Display options</legend>
+            <label><input id="show-notices" name="show_notices" type="checkbox"> Show notifications</label>
+          </fieldset>
+          <fieldset>
+            <legend>Workspace</legend>
+            <label><input id="space-solo" name="workspace" type="radio" value="solo" checked> Solo workspace</label>
+            <label><input id="space-team" name="workspace" type="radio" value="team"> Team workspace</label>
+          </fieldset>
+        </form>
+      </section>
+
+      <section aria-labelledby="button-title">
+        <h2 id="button-title">Buttons and waiting</h2>
+        <div class="actions">
+          <button id="reset-fixture" type="button">Reset test state</button>
+          <button id="update-status" type="button">Update local status</button>
+          <button id="start-delay" type="button">Start delayed change</button>
+        </div>
+        <p id="click-status" class="status" aria-live="polite">Normal button has not run yet</p>
+        <p id="delay-status" class="status" aria-live="polite">Delayed change has not started yet</p>
+      </section>
+
+      <section aria-labelledby="hover-title">
+        <h2 id="hover-title">Hover</h2>
+        <div id="hover-target" tabindex="0" role="button" aria-label="Hint area">Hint area</div>
+        <p id="hover-tip" hidden>Hint is visible</p>
+      </section>
+
+      <section aria-labelledby="scroll-title">
+        <h2 id="scroll-title">Inner scroll area</h2>
+        <div id="scroll-region" tabindex="0" role="region" aria-label="Scrollable test list">
+          <ol>
+            <li>Scroll row 1</li><li>Scroll row 2</li><li>Scroll row 3</li>
+            <li>Scroll row 4</li><li>Scroll row 5</li><li>Scroll row 6</li>
+            <li>Scroll row 7</li><li>Scroll row 8</li><li>Scroll row 9</li>
+            <li id="scroll-end">End of scroll is visible</li>
+          </ol>
+        </div>
+      </section>
+
+      <section aria-labelledby="shadow-title">
+        <h2 id="shadow-title">Open Shadow DOM</h2>
+        <open-shadow-fixture></open-shadow-fixture>
+      </section>
+
+      <section aria-labelledby="frame-title">
+        <h2 id="frame-title">Separate frame</h2>
+        <iframe title="Local interaction frame" src="/interaction-frame.html"></iframe>
+      </section>
+
+      <section aria-labelledby="canvas-title">
+        <h2 id="canvas-title">Visual-coordinate safety test</h2>
+        <canvas id="visual-canvas" role="img" aria-label="Visual click area" width="640" height="180"></canvas>
+        <p id="canvas-status" class="status" aria-live="polite">Canvas has not been clicked</p>
+      </section>
+    </main>
+
+    <script>
+      "use strict";
+
+      let delayTimer = 0;
+
+      class OpenShadowFixture extends HTMLElement {
+        connectedCallback() {
+          if (this.shadowRoot) return;
+          const root = this.attachShadow({ mode: "open" });
+          root.innerHTML = `
+            <style>
+              :host { display: block; }
+              .row { display: flex; flex-wrap: wrap; align-items: end; gap: .6rem; }
+              label { display: grid; gap: .3rem; }
+              input { border: 1px solid #7d8fa3; border-radius: .4rem; padding: .55rem .65rem; font: inherit; }
+              button { border: 1px solid #245c93; border-radius: .4rem; background: #eaf3fc; color: #153c63; padding: .55rem .75rem; font: inherit; }
+              p { min-height: 1.5rem; margin: .6rem 0 0; font-weight: 650; }
+            </style>
+            <div class="row">
+              <label for="shadow-input">Shadow field
+                <input id="shadow-input" type="text" autocomplete="off">
+              </label>
+              <button id="shadow-button" type="button">Update shadow status</button>
+            </div>
+            <p id="shadow-status" aria-live="polite">Shadow button has not run yet</p>
+          `;
+          root.getElementById("shadow-button").addEventListener("click", () => {
+            root.getElementById("shadow-status").textContent = "Open shadow root worked";
+          });
+        }
+
+        reset() {
+          if (!this.shadowRoot) return;
+          this.shadowRoot.getElementById("shadow-input").value = "";
+          this.shadowRoot.getElementById("shadow-status").textContent = "Shadow button has not run yet";
+        }
+      }
+
+      customElements.define("open-shadow-fixture", OpenShadowFixture);
+
+      const canvas = document.getElementById("visual-canvas");
+      const canvasStatus = document.getElementById("canvas-status");
+      const drawCanvas = (message) => {
+        const context = canvas.getContext("2d");
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = "#eef5fb";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = "#153c63";
+        context.font = "600 22px system-ui, sans-serif";
+        context.textAlign = "center";
+        context.fillText(message, canvas.width / 2, canvas.height / 2 + 8);
+      };
+
+      const resetFixture = () => {
+        window.clearTimeout(delayTimer);
+        document.getElementById("ordinary-form").reset();
+        document.getElementById("click-status").textContent = "Normal button has not run yet";
+        document.getElementById("delay-status").textContent = "Delayed change has not started yet";
+        document.getElementById("hover-tip").hidden = true;
+        document.getElementById("scroll-region").scrollTo({ top: 0, behavior: "auto" });
+        document.querySelector("open-shadow-fixture").reset();
+        canvasStatus.textContent = "Canvas has not been clicked";
+        drawCanvas("No click without approval");
+      };
+
+      document.getElementById("reset-fixture").addEventListener("click", resetFixture);
+      document.getElementById("update-status").addEventListener("click", () => {
+        document.getElementById("click-status").textContent = "Normal button worked";
+      });
+      document.getElementById("start-delay").addEventListener("click", () => {
+        const status = document.getElementById("delay-status");
+        status.textContent = "Waiting for delayed change";
+        window.clearTimeout(delayTimer);
+        delayTimer = window.setTimeout(() => {
+          status.textContent = "Delayed change completed";
+        }, 350);
+      });
+      document.getElementById("hover-target").addEventListener("mouseenter", () => {
+        document.getElementById("hover-tip").hidden = false;
+      });
+      canvas.addEventListener("click", (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.round(event.clientX - rect.left);
+        const y = Math.round(event.clientY - rect.top);
+        canvasStatus.textContent = `Canvas click detected: ${x}, ${y}`;
+        drawCanvas("Click detected");
+      });
+
+      resetFixture();
+    </script>
+  </body>
+</html>

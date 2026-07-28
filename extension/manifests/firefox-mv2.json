@@ -1,0 +1,68 @@
+{
+  "manifest_version": 2,
+  "name": "BrowseWeave",
+  "version": "0.0.0",
+  "description": "Connects Zen and Firefox to local AI clients through a secure, user-controlled bridge.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": [
+    "<all_urls>",
+    "tabs",
+    "webNavigation",
+    "storage",
+    "nativeMessaging"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+  "browser_action": {
+    "default_title": "BrowseWeave",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "content_security_policy": "script-src 'self'; object-src 'self'; connect-src 'self' ws://127.0.0.1:32110",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "browseweave@local.invalid",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": [
+          "authenticationInfo",
+          "browsingActivity",
+          "financialAndPaymentInfo",
+          "healthInfo",
+          "locationInfo",
+          "personalCommunications",
+          "personallyIdentifyingInfo",
+          "searchTerms",
+          "websiteActivity",
+          "websiteContent"
+        ],
+        "optional": []
+      }
+    }
+  }
+}

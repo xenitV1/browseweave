@@ -1,0 +1,295 @@
+name: Publish npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type "publish browseweave@VERSION" and run this workflow from tag vVERSION
+        required: true
+        type: string
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - run: npm run verify:release
+      - name: Temporarily unlock this ephemeral checkout
+        run: npm pkg delete private
+      - name: Validate the explicitly confirmed release package
+        run: node scripts/check-npm-pack.mjs --publish --list
+        env:
+          BROWSEWEAVE_RELEASE: "1"
+          BROWSEWEAVE_RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+      - name: Create one immutable npm tarball
+        run: |
+          set -euo pipefail
+          mkdir release
+          npm pack --ignore-scripts --pack-destination release
+          test "$(find release -maxdepth 1 -type f -name '*.tgz' | wc -l)" -eq 1
+          (cd release && sha256sum -- *.tgz > SHA256SUMS)
+      - name: Upload the release candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: browseweave-npm-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: npm
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Download and automatically verify the release artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: browseweave-npm-${{ github.sha }}
+          path: release
+      - name: Verify the exact tarball again without running repository code
+        id: verify
+        env:
+          BROWSEWEAVE_RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const { createHash } = require("node:crypto");
+          const { appendFileSync, lstatSync, readFileSync, readdirSync } = require("node:fs");
+          const path = require("node:path");
+          const { gunzipSync } = require("node:zlib");
+
+          const fail = (message) => { throw new Error(`Release artifact refused: ${message}`); };
+          const npmVersion = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim().split(".").map(Number);
+          const [npmMajor = 0, npmMinor = 0, npmPatch = 0] = npmVersion;
+          if (npmMajor < 11 || (npmMajor === 11 && (npmMinor < 5 || (npmMinor === 5 && npmPatch < 1)))) {
+            fail("npm 11.5.1 or newer is required");
+          }
+          const releaseMetadata = (releaseVersion) => {
+            const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.(0|[1-9]\d*))?$/.exec(releaseVersion);
+            if (!match) fail("the release version is unsupported");
+            const components = match.slice(1, 4).map(Number);
+            const channel = match[4] || "stable";
+            const sequence = match[5] === undefined ? 0 : Number(match[5]);
+            if (components.some((component) => component > 65_535) || sequence > 9_999) {
+              fail("the release version exceeds the browser-extension range");
+            }
+            const build = channel === "alpha" ? 1 + sequence
+              : channel === "beta" ? 10_001 + sequence
+                : channel === "rc" ? 20_001 + sequence
+                  : 65_535;
+            return {
+              browserVersion: `${components[0]}.${components[1]}.${components[2]}.${build}`,
+              distTag: channel === "stable" ? "latest" : channel
+            };
+          };
+          const refMatch = /^refs\/tags\/v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.exec(process.env.GITHUB_REF || "");
+          if (!refMatch) fail("the workflow must run from an exact vVERSION tag");
+          const version = refMatch[1];
+          const { browserVersion, distTag } = releaseMetadata(version);
+          if (process.env.BROWSEWEAVE_RELEASE_CONFIRMATION !== `publish browseweave@${version}`) fail("confirmation does not match the tag");
+
+          const directory = path.resolve("release");
+          const names = readdirSync(directory).sort();
+          const archiveName = `browseweave-${version}.tgz`;
+          if (JSON.stringify(names) !== JSON.stringify(["SHA256SUMS", archiveName].sort())) fail("unexpected release files");
+          const archive = path.join(directory, archiveName);
+          if (!lstatSync(archive).isFile() || lstatSync(archive).isSymbolicLink()) fail("tarball is not a regular file");
+          if (lstatSync(archive).size > 5 * 1024 * 1024) fail("tarball exceeds 5 MiB");
+
+          const sumLine = readFileSync(path.join(directory, "SHA256SUMS"), "utf8");
+          const sumMatch = /^([a-f0-9]{64})  (browseweave-[^/\r\n]+\.tgz)\n$/.exec(sumLine);
+          if (!sumMatch || sumMatch[2] !== archiveName) fail("checksum manifest is invalid");
+          const compressed = readFileSync(archive);
+          const actualSum = createHash("sha256").update(compressed).digest("hex");
+          if (actualSum !== sumMatch[1]) fail("tarball checksum mismatch");
+
+          const tar = gunzipSync(compressed, { maxOutputLength: 6 * 1024 * 1024 });
+          if (tar.length % 512 !== 0) fail("tar stream is not block aligned");
+          const readString = (header, start, length) => {
+            const field = header.subarray(start, start + length);
+            const nul = field.indexOf(0);
+            return field.subarray(0, nul < 0 ? field.length : nul).toString("utf8");
+          };
+          const readOctal = (header, start, length, label) => {
+            const value = readString(header, start, length).trim();
+            if (!/^[0-7]+$/.test(value)) fail(`invalid tar ${label}`);
+            return Number.parseInt(value, 8);
+          };
+          const files = new Map();
+          let totalSize = 0;
+          let offset = 0;
+          let foundEnd = false;
+          while (offset + 512 <= tar.length) {
+            const header = tar.subarray(offset, offset + 512);
+            if (header.every((byte) => byte === 0)) {
+              if (!tar.subarray(offset).every((byte) => byte === 0)) fail("non-zero data follows the tar terminator");
+              foundEnd = true;
+              break;
+            }
+            const expectedChecksum = readOctal(header, 148, 8, "checksum");
+            let actualChecksum = 0;
+            for (let index = 0; index < 512; index += 1) {
+              actualChecksum += index >= 148 && index < 156 ? 32 : header[index];
+            }
+            if (actualChecksum !== expectedChecksum) fail("tar header checksum mismatch");
+            const prefix = readString(header, 345, 155);
+            const shortName = readString(header, 0, 100);
+            const entryName = prefix ? `${prefix}/${shortName}` : shortName;
+            const type = header[156];
+            if (type !== 0 && type !== 48) fail(`non-regular tar entry: ${entryName}`);
+            if (readString(header, 157, 100) !== "") fail(`tar link target is forbidden: ${entryName}`);
+            if (!entryName.startsWith("package/") || entryName.includes("\\") || entryName.includes("//")) fail("unsafe tar path");
+            const relative = entryName.slice("package/".length);
+            const parts = relative.split("/");
+            if (!relative || parts.some((part) => part === "" || part === "." || part === "..")) fail("unsafe tar path component");
+            if (files.has(relative)) fail(`duplicate tar path: ${relative}`);
+            const size = readOctal(header, 124, 12, "size");
+            if (!Number.isSafeInteger(size) || size < 0 || size > 5 * 1024 * 1024) fail(`invalid tar size: ${relative}`);
+            const dataStart = offset + 512;
+            const dataEnd = dataStart + size;
+            if (dataEnd > tar.length) fail(`truncated tar entry: ${relative}`);
+            files.set(relative, Buffer.from(tar.subarray(dataStart, dataEnd)));
+            totalSize += size;
+            if (totalSize > 5 * 1024 * 1024 || files.size > 200) fail("unpacked package budget exceeded");
+            offset = dataStart + Math.ceil(size / 512) * 512;
+          }
+          if (!foundEnd || files.size === 0) fail("tar terminator or files are missing");
+
+          const allowedPath = (file) => {
+            if ([
+              "LICENSE", "README.md", "CHANGELOG.md", "SUPPORT.md", "CODE_OF_CONDUCT.md",
+              "CONTRIBUTING.md", "PRIVACY.md", "SECURITY.md", "SKILL.md", "THIRD_PARTY_NOTICES.md",
+              "package.json"
+            ].includes(file)) return true;
+            if (file === "extension/PRIVACY.md") return true;
+            if (/^extension\/dist\/(?:firefox-mv2|chromium-mv3)\/LICENSE$/.test(file)) return true;
+            if (/^assets\/brand\/browseweave-(?:logo|mark)\.png$/.test(file)) return true;
+            if (/^dist\/src\/[a-z0-9-]+\.(?:js|d\.ts)$/.test(file)) return true;
+            return /^extension\/dist\/(?:firefox-mv2|chromium-mv3)\/(?:[a-z0-9_-]+\/)*[a-z0-9_.-]+\.(?:js|json|html|css|png|md)$/i.test(file);
+          };
+          const required = [
+            "LICENSE", "README.md", "CHANGELOG.md", "SUPPORT.md", "CODE_OF_CONDUCT.md",
+            "CONTRIBUTING.md", "PRIVACY.md", "SECURITY.md", "SKILL.md", "THIRD_PARTY_NOTICES.md",
+            "package.json",
+            "assets/brand/browseweave-logo.png", "assets/brand/browseweave-mark.png", "extension/PRIVACY.md",
+            "dist/src/browser-environment.js",
+            "dist/src/chromium-extension-discovery.js", "dist/src/cli.js", "dist/src/client-config.js",
+            "dist/src/config.js", "dist/src/daemon.js", "dist/src/ipc-client.js", "dist/src/mcp.js",
+            "dist/src/mcp.d.ts", "dist/src/native-bootstrap.js",
+            "dist/src/native-host-config.js", "dist/src/native-host-install.js", "dist/src/native-host-plan.js",
+            "dist/src/native-host.js", "dist/src/native-service.js", "dist/src/native-setup-protocol.js",
+            "dist/src/npm-invocation.js", "dist/src/protocol.js", "dist/src/purge-data.js",
+            "dist/src/purge-data.d.ts",
+            "dist/src/service-install-guard.js", "dist/src/service-plan.js", "dist/src/setup-flow.js",
+            "dist/src/setup-status.js", "dist/src/version.js", "dist/src/zen-flatpak.js",
+            "extension/dist/firefox-mv2/manifest.json", "extension/dist/firefox-mv2/background.js",
+            "extension/dist/firefox-mv2/content.js", "extension/dist/firefox-mv2/options.html",
+            "extension/dist/firefox-mv2/options.js", "extension/dist/firefox-mv2/popup.html",
+            "extension/dist/firefox-mv2/popup.js", "extension/dist/firefox-mv2/icons/icon-16.png",
+            "extension/dist/firefox-mv2/icons/icon-32.png", "extension/dist/firefox-mv2/icons/icon-48.png",
+            "extension/dist/firefox-mv2/icons/icon-96.png", "extension/dist/firefox-mv2/icons/icon-128.png",
+            "extension/dist/firefox-mv2/styles/ui.css", "extension/dist/firefox-mv2/PRIVACY.md",
+            "extension/dist/firefox-mv2/THIRD_PARTY_NOTICES.md", "extension/dist/firefox-mv2/LICENSE",
+            "extension/dist/chromium-mv3/manifest.json",
+            "extension/dist/chromium-mv3/background.js", "extension/dist/chromium-mv3/content.js",
+            "extension/dist/chromium-mv3/options.html", "extension/dist/chromium-mv3/options.js",
+            "extension/dist/chromium-mv3/popup.html", "extension/dist/chromium-mv3/popup.js",
+            "extension/dist/chromium-mv3/icons/icon-16.png", "extension/dist/chromium-mv3/icons/icon-32.png",
+            "extension/dist/chromium-mv3/icons/icon-48.png", "extension/dist/chromium-mv3/icons/icon-96.png",
+            "extension/dist/chromium-mv3/icons/icon-128.png", "extension/dist/chromium-mv3/styles/ui.css",
+            "extension/dist/chromium-mv3/PRIVACY.md", "extension/dist/chromium-mv3/THIRD_PARTY_NOTICES.md",
+            "extension/dist/chromium-mv3/LICENSE"
+          ];
+          for (const file of files.keys()) {
+            if (!allowedPath(file)) fail(`unexpected package path: ${file}`);
+            if (/(?:^|\/)(?:\.npmrc|\.env(?:\.|$)|package-lock\.json$)/.test(file)) fail(`forbidden package path: ${file}`);
+            if (/(?:^|\/)setup-ticket\.json$/.test(file)) fail(`short-lived setup ticket entered package: ${file}`);
+            if (/(?:\.map|\.ts|\.tsx)$/.test(file) && !file.endsWith(".d.ts")) fail(`source file entered package: ${file}`);
+          }
+          for (const file of required) if (!files.has(file)) fail(`required package file is missing: ${file}`);
+
+          const forbiddenContent = [
+            ["npm authentication setting", /\/\/(?:registry\.)?npmjs\.org\/:_authToken\s*=/i],
+            ["npm access token", /\bnpm_[a-z0-9]{20,}\b/i],
+            ["GitHub access token", /\b(?:ghp_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,})\b/i],
+            ["OpenAI-style secret key", /\bsk-[a-z0-9_-]{20,}\b/i],
+            ["private key", /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
+            ["dangling source map directive", /[#@]\s*sourceMappingURL=/],
+            ["personal home path", /(?:\/home\/[a-z0-9._-]+\/|\/Users\/[a-z0-9._ -]+\/|[a-z]:\\Users\\[^\\\r\n]+\\)/i],
+            ["legacy product path", /(?:Projeler\/zen-codex-bridge|zen-codex-bridge\.service|web-ext-artifacts\/zen-codex-bridge)/i]
+          ];
+          for (const [file, contents] of files) {
+            if (file.endsWith(".png")) continue;
+            const text = contents.toString("utf8");
+            for (const [label, pattern] of forbiddenContent) if (pattern.test(text)) fail(`${label} detected in ${file}`);
+          }
+
+          const manifestText = files.get("package.json").toString("utf8");
+          const manifest = JSON.parse(manifestText);
+          if (manifest.name !== "browseweave" || manifest.version !== version || Object.hasOwn(manifest, "private")) fail("package identity is invalid");
+          if (manifest.license !== "MIT" || manifest.repository?.url !== "git+https://github.com/xenitV1/browseweave.git" || manifest.homepage !== "https://github.com/xenitV1/browseweave#readme") fail("package provenance metadata is invalid");
+          const expectedBin = {
+            browseweave: "dist/src/cli.js",
+            "browseweave-mcp": "dist/src/mcp.js",
+            "browseweave-daemon": "dist/src/daemon.js",
+            "browseweave-native-host": "dist/src/native-host.js"
+          };
+          if (JSON.stringify(manifest.bin) !== JSON.stringify(expectedBin)) fail("executable metadata is invalid");
+          if (manifest.main !== "dist/src/mcp.js" || manifest.types !== "dist/src/mcp.d.ts" || manifest.type !== "module") fail("module metadata is invalid");
+          const expectedDependencies = { "@modelcontextprotocol/sdk": "1.30.0", "jsonc-parser": "3.3.1", ws: "8.21.1", zod: "3.25.76" };
+          if (JSON.stringify(manifest.dependencies) !== JSON.stringify(expectedDependencies) || manifest.engines?.node !== ">=22.14.0") fail("runtime dependency metadata is invalid");
+          for (const dependencyField of ["optionalDependencies", "peerDependencies", "peerDependenciesMeta", "bundledDependencies", "bundleDependencies"]) {
+            if (Object.hasOwn(manifest, dependencyField)) fail(`unexpected dependency metadata: ${dependencyField}`);
+          }
+          const expectedPublishConfig = { access: "public", provenance: true, registry: "https://registry.npmjs.org/" };
+          if (JSON.stringify(manifest.publishConfig) !== JSON.stringify(expectedPublishConfig)) fail("registry metadata is invalid");
+          for (const hook of ["preinstall", "install", "postinstall", "prepare"]) {
+            if (Object.hasOwn(manifest.scripts || {}, hook)) fail(`install lifecycle hook is forbidden: ${hook}`);
+          }
+
+          if (!files.get("dist/src/native-host.js").toString("utf8").startsWith("#!/usr/bin/env node\n")) {
+            fail("native host executable is missing its Node.js launcher line");
+          }
+          const expectedExtensionPermissions = {
+            "firefox-mv2": ["<all_urls>", "tabs", "webNavigation", "storage", "nativeMessaging"],
+            "chromium-mv3": ["tabs", "webNavigation", "storage", "scripting", "nativeMessaging"]
+          };
+          for (const [target, expectedPermissions] of Object.entries(expectedExtensionPermissions)) {
+            const extensionManifest = JSON.parse(files.get(`extension/dist/${target}/manifest.json`).toString("utf8"));
+            if (extensionManifest.version !== browserVersion || extensionManifest.version_name !== version) {
+              fail(`${target} extension version does not match browseweave@${version}`);
+            }
+            const permissions = extensionManifest.permissions;
+            if (!Array.isArray(permissions) || new Set(permissions).size !== permissions.length
+              || permissions.length !== expectedPermissions.length
+              || !expectedPermissions.every((permission) => permissions.includes(permission))) {
+              fail(`${target} native messaging permission set is incomplete or unexpected`);
+            }
+          }
+
+          appendFileSync(process.env.GITHUB_OUTPUT, `archive=${archive}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `dist_tag=${distTag}\n`);
+          NODE
+      - name: Publish only the verified tarball with trusted OIDC
+        run: npm publish "${{ steps.verify.outputs.archive }}" --access public --ignore-scripts --tag "${{ steps.verify.outputs.dist_tag }}"

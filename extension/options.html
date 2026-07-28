@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BrowseWeave Settings</title>
+    <link rel="stylesheet" href="styles/ui.css">
+  </head>
+  <body class="options-page">
+    <main class="options-shell" aria-labelledby="title">
+      <div class="brand-heading options-brand">
+        <img class="brand-mark" src="icons/icon-48.png" width="48" height="48" alt="BrowseWeave logo">
+        <div>
+          <p class="eyebrow">Local browser connection</p>
+          <h1 id="title">BrowseWeave settings</h1>
+        </div>
+      </div>
+      <p class="lead">The extension connects only to the fixed loopback address below. It cannot be redirected to an internet server.</p>
+
+      <section class="settings-card" aria-labelledby="connect-title">
+        <h2 id="connect-title">Connect this browser</h2>
+        <p class="card-copy">BrowseWeave will open only its registered helper on this computer. The pairing key stays hidden from this page, the clipboard, websites, and AI clients.</p>
+        <div class="button-row">
+          <button id="connect-native" class="primary wide-action" type="button">Connect BrowseWeave</button>
+          <button id="remove-token" class="danger" type="button">Remove pairing</button>
+        </div>
+        <small>Zen may show a one-time operating-system permission prompt for the local helper. Approve it only when you pressed this button.</small>
+        <p id="connect-result" class="result" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="status-card" aria-live="polite">
+        <strong id="status-label">Checking connection…</strong>
+        <span id="status-detail">Looking for the local bridge.</span>
+      </section>
+
+      <section class="explanation">
+        <h2>This browser installation</h2>
+        <dl class="facts compact-facts">
+          <div><dt>Browser</dt><dd id="browser-label">Detecting…</dd></div>
+          <div><dt>Installation ID</dt><dd id="installation-label">Creating…</dd></div>
+        </dl>
+        <p class="card-copy">Each browser profile gets a separate local installation ID and a non-extractable P-256 signing key. The private key stays inside this browser profile.</p>
+      </section>
+
+      <section class="explanation" aria-labelledby="remote-permissions-title">
+        <h2 id="remote-permissions-title">Remote sign-in permissions</h2>
+        <p class="card-copy">Off by default. Open the BrowseWeave popup on an HTTPS sign-in page to grant one use for that exact origin. Permissions never use wildcards and expire within 24 hours.</p>
+        <p id="remote-permissions-empty" class="empty-state">No remote sign-in permission is active.</p>
+        <div id="remote-permissions-list" class="permission-list"></div>
+        <p id="permission-result" class="result" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="explanation">
+        <h2>Safety boundaries</h2>
+        <ul>
+          <li>The extension does not request cookie, history, or saved-password permissions.</li>
+          <li>Only the registered BrowseWeave helper can start local setup; websites and content scripts cannot call it.</li>
+          <li>Ordinary AI commands cannot fill password, one-time-code, or payment-card fields.</li>
+          <li>Local credential handoff values stay inside the extension; optional remote mode is exact-origin, one-use, and user-granted.</li>
+          <li>Sensitive actions wait for an approval signed by this browser profile.</li>
+          <li>CAPTCHA, passkey, security-key, 403, and 429 screens require direct user action.</li>
+        </ul>
+      </section>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

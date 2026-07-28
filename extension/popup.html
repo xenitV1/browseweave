@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BrowseWeave</title>
+    <link rel="stylesheet" href="styles/ui.css">
+  </head>
+  <body class="popup-page">
+    <main class="panel" aria-labelledby="title">
+      <div class="heading-row">
+        <div class="brand-heading">
+          <img class="brand-mark" src="icons/icon-48.png" width="40" height="40" alt="BrowseWeave logo">
+          <div>
+            <p class="eyebrow">Local · user controlled</p>
+            <h1 id="title">BrowseWeave</h1>
+          </div>
+        </div>
+        <span id="status-dot" class="status-dot" aria-hidden="true"></span>
+      </div>
+
+      <section class="status-card" aria-live="polite">
+        <strong id="status-label">Checking connection…</strong>
+        <span id="status-detail">Looking for the local bridge.</span>
+      </section>
+
+      <section id="human-card" class="attention-card" aria-labelledby="human-title" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow warning">Direct action needed</p>
+            <h2 id="human-title">Continue in the browser</h2>
+          </div>
+          <span class="pill danger-pill">Paused</span>
+        </div>
+        <p id="human-message" class="card-copy"></p>
+        <p id="human-origin" class="mono-note"></p>
+        <button id="resume-human" class="primary" type="button">Check again</button>
+      </section>
+
+      <section id="credential-card" class="credential-card" aria-labelledby="credential-title" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Trusted local entry</p>
+            <h2 id="credential-title">Complete sign-in</h2>
+          </div>
+          <span class="pill">One use</span>
+        </div>
+        <p id="credential-origin" class="mono-note"></p>
+        <p class="card-copy">Values entered here go directly to the bound page fields. They are not sent to the local bridge or AI client. Browser password-manager prompts are outside this extension's guarantee.</p>
+        <div id="credential-fields" class="credential-fields"></div>
+        <p id="credential-submit-note" class="warning-note" hidden>BrowseWeave verifies the current pre-action form destination, then submits once. The site can still redirect or alter its own behavior afterward.</p>
+        <div class="button-row">
+          <button id="complete-credential" class="primary" type="button">Fill once</button>
+          <button id="cancel-credential" class="secondary" type="button">Cancel</button>
+        </div>
+        <p id="credential-result" class="result" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="approval-section" aria-labelledby="approval-title">
+        <div class="section-heading">
+          <h2 id="approval-title">Pending approvals</h2>
+          <span id="approval-count" class="pill">0</span>
+        </div>
+        <p id="approval-empty" class="empty-state">No sensitive action is waiting.</p>
+        <div id="approval-list" class="approval-list"></div>
+        <p id="approval-result" class="result" role="status" aria-live="polite"></p>
+      </section>
+
+      <dl class="facts">
+        <div><dt>Browser</dt><dd id="browser-label">Detecting…</dd></div>
+        <div><dt>Installation</dt><dd id="installation-label">Creating…</dd></div>
+        <div><dt>Page access</dt><dd id="access-label">Checking…</dd></div>
+        <div><dt>Endpoint</dt><dd>127.0.0.1:32110</dd></div>
+      </dl>
+
+      <section class="managed-tabs-card" aria-labelledby="managed-tabs-title">
+        <div class="section-heading">
+          <h2 id="managed-tabs-title">BrowseWeave tabs</h2>
+          <span id="managed-tab-count" class="pill">0 / 10</span>
+        </div>
+        <p id="managed-tab-detail" class="card-copy">Checking BrowseWeave-owned tabs…</p>
+        <button id="cleanup-managed-tabs" class="danger" type="button" disabled>Close managed tabs</button>
+      </section>
+
+      <section class="remote-credential-card" aria-labelledby="remote-credential-title">
+        <div class="section-heading">
+          <h2 id="remote-credential-title">Remote sign-in permission</h2>
+          <span id="remote-permission-state" class="pill">Off</span>
+        </div>
+        <p id="remote-origin" class="mono-note">Open this popup on an HTTPS sign-in page.</p>
+        <p class="card-copy">Optional fallback: allow the connected AI to send a username/password to this exact origin once. Your AI provider may see those values.</p>
+        <label class="compact-label" for="remote-permission-duration">Permission window</label>
+        <select id="remote-permission-duration">
+          <option value="900000">15 minutes</option>
+          <option value="3600000">1 hour</option>
+          <option value="86400000">24 hours</option>
+        </select>
+        <div class="button-row">
+          <button id="grant-remote-credential" class="danger" type="button">Allow once</button>
+          <button id="revoke-remote-credential" class="secondary" type="button" hidden>Revoke</button>
+        </div>
+        <p id="remote-permission-result" class="result" role="status" aria-live="polite"></p>
+      </section>
+
+      <p class="privacy-note">Ordinary AI commands cannot fill passwords, one-time codes, or payment-card fields. CAPTCHA, passkey, security-key, 403, and 429 screens are handed back to you—never bypassed.</p>
+
+      <div class="button-row">
+        <button id="reconnect" class="primary" type="button">Reconnect</button>
+        <button id="open-options" class="secondary" type="button">Settings</button>
+      </div>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

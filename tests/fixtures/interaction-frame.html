@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Local Interaction Frame</title>
+    <style>
+      body { margin: 0; padding: 1rem; color: #17202a; font: 16px/1.45 system-ui, sans-serif; }
+      button { border: 1px solid #245c93; border-radius: .4rem; background: #eaf3fc; color: #153c63; padding: .55rem .75rem; font: inherit; }
+      p { min-height: 1.5rem; font-weight: 650; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Local iframe area</h1>
+      <button id="frame-update" type="button">Update frame status</button>
+      <p id="frame-status" aria-live="polite">Frame button has not run yet</p>
+    </main>
+    <script>
+      "use strict";
+      document.getElementById("frame-update").addEventListener("click", () => {
+        document.getElementById("frame-status").textContent = "Frame button worked";
+      });
+    </script>
+  </body>
+</html>

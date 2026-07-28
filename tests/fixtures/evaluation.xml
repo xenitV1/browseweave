@@ -1,0 +1,42 @@
+<evaluation>
+  <qa_pair>
+    <question>Verify bridge status, find the "BrowseWeave Evaluation Archive" tab, and read every frame. Among active projects, return the name of the project with the single highest monthly-revenue-per-seat ratio shown by the main table.</question>
+    <answer>Fener</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Group active projects in the "BrowseWeave Evaluation Archive" tab by owner. Return only the name of the person with the highest total active monthly revenue.</question>
+    <answer>Ece</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Sum seats for active projects only in the "BrowseWeave Evaluation Archive" tab by region. Return the region with the highest total.</question>
+    <answer>West</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Sum support-request counts for every paused project in the "BrowseWeave Evaluation Archive" tab. Return only the number.</question>
+    <answer>27</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In the "BrowseWeave Evaluation Archive" tab, consider projects that started from April through June 2025, are active, and show at most four support requests in the main table. Return the name of the one with the highest monthly revenue.</question>
+    <answer>Göbeklitepe</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Use both the main table in the "BrowseWeave Evaluation Archive" tab and the date corrections in its separate audit frame. Among active projects with at least 20 seats, return the name of the project with the earliest authoritative start date.</question>
+    <answer>Fener</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Find the owner with the largest active monthly-revenue portfolio in the "BrowseWeave Evaluation Archive" tab. Among that owner's projects, return the code of the project with the lowest monthly revenue.</question>
+    <answer>B29</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In the "BrowseWeave Evaluation Archive" tab, subtract total active monthly revenue in the North region from total active monthly revenue in the East region. Return only the integer.</question>
+    <answer>1000</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Sum monthly revenue for every active project in the "BrowseWeave Evaluation Archive" tab. Return only the integer.</question>
+    <answer>7495</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Find every project in the "BrowseWeave Evaluation Archive" tab that started in May 2025 and apply the authoritative support-request correction from the separate frame. Return the code of the project with the fewest remaining support requests.</question>
+    <answer>K15</answer>
+  </qa_pair>
+</evaluation>

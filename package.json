@@ -1,0 +1,108 @@
+{
+  "name": "browseweave",
+  "version": "0.1.0-beta.1",
+  "private": true,
+  "description": "Secure local browser bridge and MCP server for AI clients",
+  "license": "MIT",
+  "author": "Mehmet Apaydin",
+  "homepage": "https://github.com/xenitV1/browseweave#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xenitV1/browseweave.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xenitV1/browseweave/issues"
+  },
+  "keywords": [
+    "mcp",
+    "browser-automation",
+    "webextension",
+    "codex",
+    "claude-code",
+    "cursor",
+    "opencode",
+    "zen-browser",
+    "chrome"
+  ],
+  "type": "module",
+  "main": "dist/src/mcp.js",
+  "types": "dist/src/mcp.d.ts",
+  "files": [
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SUPPORT.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "dist/src/*.js",
+    "dist/src/*.d.ts",
+    "extension/dist/**/*.js",
+    "extension/dist/**/*.json",
+    "extension/dist/**/*.html",
+    "extension/dist/**/*.css",
+    "extension/dist/**/*.png",
+    "extension/dist/**/*.md",
+    "extension/dist/**/LICENSE",
+    "extension/PRIVACY.md",
+    "assets/brand/*.png",
+    "SKILL.md",
+    "PRIVACY.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "bin": {
+    "browseweave": "dist/src/cli.js",
+    "browseweave-mcp": "dist/src/mcp.js",
+    "browseweave-daemon": "dist/src/daemon.js",
+    "browseweave-native-host": "dist/src/native-host.js"
+  },
+  "scripts": {
+    "build": "node scripts/clean-build.mjs && tsc -p tsconfig.json && node scripts/check-version.mjs && npm run typecheck:extension && node scripts/build-extension.mjs",
+    "typecheck:extension": "tsc -p extension/tsconfig.json",
+    "build:extension": "node scripts/build-extension.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint:extension": "node scripts/validate-extension.mjs",
+    "lint:mozilla": "npx --yes web-ext@10.5.0 lint --source-dir extension/dist/firefox-mv2",
+    "package:extension:firefox": "node scripts/make-xpi.mjs",
+    "package:extension:chromium": "node scripts/make-chromium-zip.mjs",
+    "package:extension": "npm run build:extension && npm run lint:extension && npm run package:extension:firefox && npm run package:extension:chromium",
+    "qa:extension": "npx --yes web-ext@10.5.0 run --firefox=flatpak:app.zen_browser.zen --source-dir extension/dist/firefox-mv2",
+    "smoke:mcp": "node scripts/smoke-mcp.mjs",
+    "smoke:live": "node scripts/smoke-live-bridge.mjs",
+    "fixture:evaluation": "node scripts/serve-evaluation-fixture.mjs",
+    "check:pack": "npm run build && node scripts/check-npm-pack.mjs",
+    "prepack": "npm run build && node scripts/check-npm-pack.mjs",
+    "prepublishOnly": "node scripts/check-npm-pack.mjs --publish",
+    "release:bootstrap": "node scripts/bootstrap-publish.mjs",
+    "verify": "npm run build && npm run test && npm run smoke:mcp && npm run lint:extension && node scripts/check-npm-pack.mjs && npm audit --omit=dev",
+    "verify:release": "npm run verify && npm run lint:mozilla && npm run package:extension",
+    "start:mcp": "node dist/src/mcp.js",
+    "start:bridge": "node dist/src/daemon.js"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "jsonc-parser": "3.3.1",
+    "ws": "8.21.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/firefox-webext-browser": "143.0.0",
+    "@types/node": "26.1.2",
+    "@types/webextension-polyfill": "0.12.5",
+    "@types/ws": "8.18.1",
+    "esbuild": "0.28.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10",
+    "webextension-polyfill": "0.12.0",
+    "yazl": "3.3.1"
+  }
+}

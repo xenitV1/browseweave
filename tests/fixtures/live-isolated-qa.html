@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Disposable local browser fixture for BrowseWeave live QA">
+    <title>BrowseWeave Isolated Live QA</title>
+    <style>
+      :root { color-scheme: light; font-family: system-ui, sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #f4f8fc; color: #132238; }
+      main { width: min(760px, calc(100% - 2rem)); margin: 2rem auto; display: grid; gap: 1rem; }
+      section { background: #fff; border: 1px solid #c9d7e7; border-radius: .75rem; padding: 1rem; }
+      h1, h2 { margin-top: 0; }
+      .notice { border-left: .3rem solid #18bfe5; padding-left: .8rem; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .8rem; }
+      label { display: grid; gap: .3rem; }
+      input, select, button { border: 1px solid #6f849d; border-radius: .4rem; padding: .55rem .65rem; font: inherit; }
+      button { background: #e9f6fb; color: #123d59; cursor: pointer; }
+      .status { min-height: 1.5rem; margin-bottom: 0; font-weight: 650; }
+      code { overflow-wrap: anywhere; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>BrowseWeave isolated live QA</h1>
+        <p class="notice">Disposable local fixture. Never enter a real account, password, payment detail, recovery code, or one-time code here.</p>
+        <p>Run marker: <code id="run-marker">missing</code></p>
+      </header>
+
+      <section aria-labelledby="ordinary-title">
+        <h2 id="ordinary-title">Ordinary form controls</h2>
+        <div class="grid">
+          <label for="qa-name">QA display name
+            <input id="qa-name" type="text" autocomplete="off">
+          </label>
+          <label for="qa-mode">QA mode
+            <select id="qa-mode">
+              <option value="basic">Basic</option>
+              <option value="isolated">Isolated</option>
+            </select>
+          </label>
+          <label for="qa-confirm">
+            <span>QA confirmation</span>
+            <input id="qa-confirm" type="checkbox">
+          </label>
+        </div>
+        <p id="ordinary-status" class="status" aria-live="polite">Ordinary form is waiting</p>
+      </section>
+
+      <section aria-labelledby="credential-title">
+        <h2 id="credential-title">Dummy local credential handoff</h2>
+        <p>Use only the public dummy values printed by the live QA script. The form never sends a request.</p>
+        <form id="credential-form" action="/live-isolated-qa.html" method="post">
+          <div class="grid">
+            <label for="qa-username">QA username
+              <input id="qa-username" name="username" type="email" autocomplete="username">
+            </label>
+            <label for="qa-password">QA password
+              <input id="qa-password" name="password" type="password" autocomplete="current-password">
+            </label>
+          </div>
+          <button id="dummy-submit" type="submit">Verify dummy sign-in</button>
+        </form>
+        <p id="credential-status" class="status" aria-live="polite">Dummy credentials are waiting</p>
+      </section>
+    </main>
+
+    <script>
+      "use strict";
+
+      const DUMMY_USERNAME = "qa-user@example.invalid";
+      const DUMMY_PASSWORD = "BrowseWeave-Dummy-Only-42!";
+      const runMarker = new URL(location.href).searchParams.get("qa_run") || "missing";
+      document.getElementById("run-marker").textContent = /^[a-f0-9]{24}$/.test(runMarker) ? runMarker : "invalid";
+
+      const ordinaryStatus = document.getElementById("ordinary-status");
+      const updateOrdinaryStatus = () => {
+        const ready = document.getElementById("qa-name").value === "Isolated QA" &&
+          document.getElementById("qa-mode").value === "isolated" &&
+          document.getElementById("qa-confirm").checked;
+        ordinaryStatus.textContent = ready ? "Ordinary form verified" : "Ordinary form is waiting";
+      };
+      for (const id of ["qa-name", "qa-mode", "qa-confirm"]) {
+        document.getElementById(id).addEventListener("input", updateOrdinaryStatus);
+        document.getElementById(id).addEventListener("change", updateOrdinaryStatus);
+      }
+
+      const credentialStatus = document.getElementById("credential-status");
+      const updateCredentialStatus = () => {
+        const ready = document.getElementById("qa-username").value === DUMMY_USERNAME &&
+          document.getElementById("qa-password").value === DUMMY_PASSWORD;
+        credentialStatus.textContent = ready ? "Dummy credentials filled locally" : "Dummy credentials are waiting";
+      };
+      for (const id of ["qa-username", "qa-password"]) {
+        document.getElementById(id).addEventListener("input", updateCredentialStatus);
+        document.getElementById(id).addEventListener("change", updateCredentialStatus);
+      }
+      document.getElementById("credential-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        updateCredentialStatus();
+      });
+    </script>
+  </body>
+</html>
