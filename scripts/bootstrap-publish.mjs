@@ -916,16 +916,18 @@ async function assertNpmBootstrapIdentity(trustedNpm, cwd, env) {
   await assertPackageIsUnpublished(trustedNpm, cwd, env);
 }
 
+export function isExactPrivateRemovalStatus(stdout) {
+  return stdout === " M package.json\n" || stdout === " M package.json\r\n";
+}
+
 async function assertOnlyPrivateRemoval(worktreeDirectory, originalPackageJson, trustedGit) {
-  const status = await requireSuccessful(
-    await runTrustedCommandCaptured(
-      trustedGit,
-      ["status", "--porcelain=v1", "--untracked-files=all"],
-      worktreeDirectory
-    ),
-    "detached worktree diff check"
+  const status = await runTrustedCommandCaptured(
+    trustedGit,
+    ["status", "--porcelain=v1", "--untracked-files=all"],
+    worktreeDirectory
   );
-  if (status !== " M package.json") {
+  if (status.code !== 0) fail("detached worktree diff check failed");
+  if (!isExactPrivateRemovalStatus(status.stdout)) {
     fail("the detached worktree may differ from its tag only by package.json private removal");
   }
 

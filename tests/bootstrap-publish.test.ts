@@ -13,6 +13,7 @@ import {
   canonicalRepositoryUrl,
   canonicalCiWorkflowRuns,
   hardenedGitArguments,
+  isExactPrivateRemovalStatus,
   nodeInvocationForTrustedRuntime,
   npmChildEnvironment,
   npmInvocationForTrustedCli,
@@ -27,6 +28,13 @@ import {
 const runFile = promisify(execFile);
 
 describe("bootstrap publish cleanup", () => {
+  it("preserves Git porcelain's leading status column when checking the private-only release edit", () => {
+    expect(isExactPrivateRemovalStatus(" M package.json\n")).toBe(true);
+    expect(isExactPrivateRemovalStatus(" M package.json\r\n")).toBe(true);
+    expect(isExactPrivateRemovalStatus("M package.json\n")).toBe(false);
+    expect(isExactPrivateRemovalStatus(" M package-lock.json\n M package.json\n")).toBe(false);
+  });
+
   it("accepts only the canonical push workflow on the exact tagged commit", () => {
     const sha = "a".repeat(40);
     const canonical = {
