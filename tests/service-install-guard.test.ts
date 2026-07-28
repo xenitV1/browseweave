@@ -1,7 +1,7 @@
 import { createServer } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_IPC_PORT, DEFAULT_WS_PORT } from "../src/config.js";
-import { PROTOCOL_VERSION } from "../src/protocol.js";
+import { DEFAULT_IPC_PORT, DEFAULT_WS_PORT } from "../src/core/config.js";
+import { PROTOCOL_VERSION } from "../src/core/protocol.js";
 import {
   authorizeServiceMutation,
   isBrowseWeaveServiceIdentity,
@@ -10,7 +10,7 @@ import {
   probeLoopbackPort,
   runManagedServiceInstallOperation,
   waitForExactBridgeHealth
-} from "../src/service-install-guard.js";
+} from "../src/native/service-install-guard.js";
 
 const openServers: Array<ReturnType<typeof createServer>> = [];
 

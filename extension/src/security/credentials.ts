@@ -1,4 +1,4 @@
-import { isStableRef, normalizeText } from "./pure";
+import { isStableRef, normalizeText } from "../shared/pure";
 
 export const LOCAL_CREDENTIAL_HANDOFF_TTL_MS = 5 * 60 * 1000;
 export const MAX_REMOTE_CREDENTIAL_PERMISSION_MS = 24 * 60 * 60 * 1000;

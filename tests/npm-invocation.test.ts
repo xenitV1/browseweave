@@ -8,7 +8,7 @@ import {
   resolveTrustedClientExecutable,
   safeClientPathEntries,
   trustedNpmCandidatePaths
-} from "../src/npm-invocation.js";
+} from "../src/clients/npm-invocation.js";
 
 describe("trusted npm invocation", () => {
   it("derives npm from the active Node installation across supported platforms", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createServicePlan } from "../src/service-plan.js";
-import { ensureExactOwnedServiceReady } from "../src/native-service.js";
-import { PROTOCOL_VERSION } from "../src/protocol.js";
+import { createServicePlan } from "../src/native/service-plan.js";
+import { ensureExactOwnedServiceReady } from "../src/native/service.js";
+import { PROTOCOL_VERSION } from "../src/core/protocol.js";
 
 function plan() {
   return createServicePlan({

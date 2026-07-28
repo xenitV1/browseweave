@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import {
   createNativeHostRegistrationPlan,
   type NativeHostRegistrationPlan
-} from "./native-host-plan.js";
-import type { NativeCallerPolicy } from "./native-setup-protocol.js";
+} from "./host-plan.js";
+import type { NativeCallerPolicy } from "./setup-protocol.js";
 
 /** Must match browser_specific_settings.gecko.id in every Firefox/Zen build. */
 export const FIREFOX_EXTENSION_ID = "browseweave@local.invalid" as const;
@@ -56,7 +56,7 @@ export function currentNativeHostRegistrationPlan(
   return createNativeHostRegistrationPlan({
     ...common,
     nodePath: process.execPath,
-    nativeHostScriptPath: fileURLToPath(new URL("./native-host.js", import.meta.url))
+    nativeHostScriptPath: fileURLToPath(new URL("../native-host.js", import.meta.url))
   });
 }
 

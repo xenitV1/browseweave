@@ -5,7 +5,7 @@ import {
   isBrowserAction,
   type BrowserAction,
   type JsonObject
-} from "../../src/protocol";
+} from "../../../src/core/protocol";
 
 export const MAX_LOCAL_APPROVAL_GRANTS = 100 as const;
 

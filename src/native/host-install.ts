@@ -8,7 +8,7 @@ import {
   type NativeHostLauncherPlan,
   type NativeHostManifestPlan,
   type NativeHostRegistrationPlan
-} from "./native-host-plan.js";
+} from "./host-plan.js";
 
 interface ExistingFile {
   readonly content: string;

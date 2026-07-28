@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { minimizePurgeTargets, purgeOwnedApplicationDirectories } from "../src/purge-data.js";
+import { minimizePurgeTargets, purgeOwnedApplicationDirectories } from "../src/native/purge-data.js";
 
 const roots: string[] = [];
 

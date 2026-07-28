@@ -2,7 +2,7 @@ import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { configureZenFlatpakNativeMessaging } from "../src/zen-flatpak.js";
+import { configureZenFlatpakNativeMessaging } from "../src/setup/zen-flatpak.js";
 
 const roots: string[] = [];
 const describeLinux = process.platform === "linux" ? describe : describe.skip;

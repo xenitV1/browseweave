@@ -10,7 +10,7 @@ import {
   prepareManagedExtension,
   setupPageHtml,
   startSetupPageServer
-} from "../src/setup-flow.js";
+} from "../src/setup/flow.js";
 
 function get(url: string): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }> {
   return new Promise((resolve, reject) => {

@@ -868,7 +868,7 @@ async function main() {
     await runQaSelfTest();
     return;
   }
-  ({ callBridge } = await import("../dist/src/ipc-client.js"));
+  ({ callBridge } = await import("../dist/src/bridge/ipc-client.js"));
   const status = asRecord(await callBridge("status"), "BrowseWeave status");
   ensure(status.service === "browseweave" && status.protocol_version === 3, "The authenticated service is not BrowseWeave protocol v3.");
   ensure(status.pending_approvals === 0, "Live QA refuses to start while a prior approval is pending.");

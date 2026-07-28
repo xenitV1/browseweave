@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { callBridge } from "./ipc-client.js";
+import { callBridge } from "../bridge/ipc-client.js";
 import {
   MAX_NATIVE_SETUP_TTL_MS,
   type NativeBrowserFamily,
   type NativeSetupOperations
-} from "./native-setup-protocol.js";
+} from "./setup-protocol.js";
 
 export const NATIVE_SETUP_TTL_MS = 2 * 60_000;
 

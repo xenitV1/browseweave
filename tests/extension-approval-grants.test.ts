@@ -4,7 +4,7 @@ import {
   hashCommandParams,
   type LocalApprovalClaim,
   type LocalApprovalGrant
-} from "../extension/src/approval-grants";
+} from "../extension/src/security/approval-grants";
 
 const NOW = Date.parse("2030-01-01T00:00:00.000Z");
 const PARAMS_HASH = `sha256:${"a".repeat(64)}`;

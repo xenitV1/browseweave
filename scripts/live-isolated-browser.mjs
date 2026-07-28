@@ -167,7 +167,7 @@ async function portListening(port) {
 }
 
 async function extensionBuild(browserName) {
-  const { APP_VERSION, BROWSER_EXTENSION_VERSION } = await import("../dist/src/version.js");
+  const { APP_VERSION, BROWSER_EXTENSION_VERSION } = await import("../dist/src/core/version.js");
   const directory = path.join(
     projectRoot,
     "extension",
@@ -596,7 +596,7 @@ async function initializeTemporaryRuntimePaths(paths) {
 
 async function verifiedNewDaemon() {
   try {
-    const { callBridge } = await import("../dist/src/ipc-client.js");
+    const { callBridge } = await import("../dist/src/bridge/ipc-client.js");
     const status = await callBridge("status", {}, 5_000);
     if (
       !status || typeof status !== "object" || Array.isArray(status) ||
@@ -614,7 +614,7 @@ async function verifiedNewDaemon() {
 
 async function authenticateTemporaryDaemon(environment, daemon, output) {
   const probe = [
-    "import { callBridge } from './dist/src/ipc-client.js';",
+    "import { callBridge } from './dist/src/bridge/ipc-client.js';",
     "const status = await callBridge('status', {}, 2000);",
     "if (status?.service !== 'browseweave' || status?.protocol_version !== 3 || status?.websocket_listening !== true) process.exit(2);",
     "process.stdout.write('browseweave:3:ready');"
@@ -656,7 +656,7 @@ async function callTemporaryBridge(context, method, params = {}, timeoutMs = 5_0
       }
       process.env[key] = value;
     }
-    const { callBridge } = await import("../dist/src/ipc-client.js");
+    const { callBridge } = await import("../dist/src/bridge/ipc-client.js");
     return await callBridge(method, params, timeoutMs);
   } finally {
     for (const item of previous) {
@@ -688,8 +688,8 @@ function assertSetupPairingBegin(value, expected) {
 
 async function waitForGuidedSetup(context, input) {
   const [{ APP_VERSION }, setupStatus] = await Promise.all([
-    import("../dist/src/version.js"),
-    import("../dist/src/setup-status.js")
+    import("../dist/src/core/version.js"),
+    import("../dist/src/bridge/setup-status.js")
   ]);
   const deadline = Math.min(Date.parse(input.expiresAt), Date.now() + GUIDED_SETUP_TIMEOUT_MS);
   let lastBridgeError = "";
@@ -745,7 +745,7 @@ async function waitForGuidedSetup(context, input) {
 }
 
 async function runGuidedSetup(context, input) {
-  const { createSetupTicket, startSetupPageServer } = await import("../dist/src/setup-flow.js");
+  const { createSetupTicket, startSetupPageServer } = await import("../dist/src/setup/flow.js");
   const browserFamily = input.browser === "chrome" ? "chromium" : "firefox";
   let page;
   let ticket;
@@ -1509,8 +1509,8 @@ async function runParallelBrowser(options, state) {
 
 async function verifyGuidedSetupControlPlane(context, browser) {
   const [{ createSetupTicket, startSetupPageServer }, { parseSetupPairingReceipt }] = await Promise.all([
-    import("../dist/src/setup-flow.js"),
-    import("../dist/src/setup-status.js")
+    import("../dist/src/setup/flow.js"),
+    import("../dist/src/bridge/setup-status.js")
   ]);
   const browserFamily = browser === "chrome" ? "chromium" : "firefox";
   let page;

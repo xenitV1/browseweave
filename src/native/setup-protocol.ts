@@ -1,7 +1,7 @@
 import { endianness } from "node:os";
 import path from "node:path";
 import { parseTree, type Node, type ParseError } from "jsonc-parser";
-import { SETUP_ID_PATTERN } from "./protocol.js";
+import { SETUP_ID_PATTERN } from "../core/protocol.js";
 
 /** Fixed browser native-messaging host name installed by BrowseWeave. */
 export const NATIVE_SETUP_HOST_NAME = "io.browseweave.setup" as const;

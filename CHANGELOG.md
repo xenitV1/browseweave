@@ -6,6 +6,11 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Reorganized the Node.js runtime and browser extension into explicit domain modules with thin, stable executable facades.
+- Added an automated architecture gate for module layout, dependency direction, cycle detection, shared contracts, and source-size budgets.
+
 ## [0.1.0-beta.1] - 2026-07-28
 
 Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons release is claimed.

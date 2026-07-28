@@ -12,8 +12,8 @@ import {
   type P256PublicJwk,
   type SetupPairingRequest,
   type SetupPairingResponse
-} from "../../src/protocol";
-import { RELEASE_VERSION_PATTERN } from "../../src/version";
+} from "../../../src/core/protocol";
+import { RELEASE_VERSION_PATTERN } from "../../../src/core/version";
 
 export const SETUP_PAIRING_TIMEOUT_MS = 15_000;
 export const SETUP_ENCRYPTION_KEY_INFO = "BrowseWeave setup encryption key v1";
@@ -89,10 +89,10 @@ export interface SetupAuthenticationState {
 
 export interface SetupPairingTransportSocket {
   readyState: number;
-  onopen: (() => void) | null;
-  onmessage: ((event: { data: unknown }) => void) | null;
-  onerror: (() => void) | null;
-  onclose: (() => void) | null;
+  onopen: ((event: Event) => void) | null;
+  onmessage: ((event: MessageEvent) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onclose: ((event: CloseEvent) => void) | null;
   send(data: string): void;
   close(code?: number, reason?: string): void;
 }

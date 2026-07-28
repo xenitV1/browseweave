@@ -36,6 +36,8 @@
     "CONTRIBUTING.md",
     "dist/src/*.js",
     "dist/src/*.d.ts",
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts",
     "extension/dist/**/*.js",
     "extension/dist/**/*.json",
     "extension/dist/**/*.html",
@@ -57,7 +59,8 @@
     "browseweave-native-host": "dist/src/native-host.js"
   },
   "scripts": {
-    "build": "node scripts/clean-build.mjs && tsc -p tsconfig.json && node scripts/check-version.mjs && npm run typecheck:extension && node scripts/build-extension.mjs",
+    "check:architecture": "node scripts/check-module-boundaries.mjs",
+    "build": "npm run check:architecture && node scripts/clean-build.mjs && tsc -p tsconfig.json && node scripts/check-version.mjs && npm run typecheck:extension && node scripts/build-extension.mjs",
     "typecheck:extension": "tsc -p extension/tsconfig.json",
     "build:extension": "node scripts/build-extension.mjs",
     "test": "vitest run",

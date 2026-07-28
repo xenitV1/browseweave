@@ -10,8 +10,8 @@ import {
   type P256PublicJwk,
   type SetupPairingRequest,
   type SetupPairingResponse
-} from "../src/protocol";
-import { APP_VERSION } from "../src/version";
+} from "../src/core/protocol";
+import { APP_VERSION } from "../src/core/version";
 import {
   SETUP_CONNECT_BUTTON_ID,
   SETUP_CONNECT_BUTTON_TEXT,
@@ -30,7 +30,7 @@ import {
   storedTokenSnapshotsEqual,
   trustedSetupClick,
   type SetupPairingTransportSocket
-} from "../extension/src/setup-pairing";
+} from "../extension/src/setup/setup-pairing";
 
 const SETUP_ID = "0123456789abcdef01234567";
 const SETUP_SECRET = "0123456789abcdef".repeat(4);
@@ -438,7 +438,7 @@ describe("one-click setup page boundary", () => {
   });
 
   it("removes the single trusted installer refresh directive only after setup controls validate", () => {
-    const contentSource = readFileSync(new URL("../extension/src/content.ts", import.meta.url), "utf8");
+    const contentSource = readFileSync(new URL("../extension/src/content/runtime.ts", import.meta.url), "utf8");
     const setupStart = contentSource.indexOf("function initializeSetupPage");
     const setupEnd = contentSource.indexOf("if (!window.__browseWeaveContentReady", setupStart);
     const setup = contentSource.slice(setupStart, setupEnd);
@@ -480,9 +480,9 @@ describe("one-click setup page boundary", () => {
   });
 
   it("keeps setup material out of the loopback page, messages, logs, and public results", () => {
-    const contentSource = readFileSync(new URL("../extension/src/content.ts", import.meta.url), "utf8");
-    const backgroundSource = readFileSync(new URL("../extension/src/background.ts", import.meta.url), "utf8");
-    const setupSource = readFileSync(new URL("../extension/src/setup-pairing.ts", import.meta.url), "utf8");
+    const contentSource = readFileSync(new URL("../extension/src/content/runtime.ts", import.meta.url), "utf8");
+    const backgroundSource = readFileSync(new URL("../extension/src/background/runtime.ts", import.meta.url), "utf8");
+    const setupSource = readFileSync(new URL("../extension/src/setup/setup-pairing.ts", import.meta.url), "utf8");
     const chromiumManifest = readFileSync(new URL("../extension/manifests/chromium-mv3.json", import.meta.url), "utf8");
     const firefoxManifest = readFileSync(new URL("../extension/manifests/firefox-mv2.json", import.meta.url), "utf8");
     const clickStart = contentSource.indexOf('button.addEventListener("click"');
@@ -556,7 +556,7 @@ describe("one-click setup page boundary", () => {
   });
 
   it("retries when a persisted setup request never reaches the daemon", () => {
-    const backgroundSource = readFileSync(new URL("../extension/src/background.ts", import.meta.url), "utf8");
+    const backgroundSource = readFileSync(new URL("../extension/src/background/runtime.ts", import.meta.url), "utf8");
     const responseSurface = backgroundSource.slice(
       backgroundSource.indexOf("async function receiveSetupPairingToken"),
       backgroundSource.indexOf("async function sendSignedHello")
@@ -703,7 +703,7 @@ describe("one-click setup page boundary", () => {
   });
 
   it("proves a lost persisted acknowledgement with ordinary new-token authentication before rollback", () => {
-    const backgroundSource = readFileSync(new URL("../extension/src/background.ts", import.meta.url), "utf8");
+    const backgroundSource = readFileSync(new URL("../extension/src/background/runtime.ts", import.meta.url), "utf8");
     const responseSurface = backgroundSource.slice(
       backgroundSource.indexOf("async function receiveSetupPairingToken"),
       backgroundSource.indexOf("async function sendSignedHello")

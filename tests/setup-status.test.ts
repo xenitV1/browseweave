@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { PROTOCOL_VERSION } from "../src/protocol.js";
+import { PROTOCOL_VERSION } from "../src/core/protocol.js";
 import {
   parseSetupDaemonStatus,
   parseSetupPairingReceipt,
   receiptMatchesConnectedBrowser
-} from "../src/setup-status.js";
+} from "../src/bridge/setup-status.js";
 
 const setupId = "0123456789abcdef01234567";
 const expiresAt = "2026-07-28T16:00:00.000Z";

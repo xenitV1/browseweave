@@ -14,7 +14,7 @@ import {
   serializeClientSetup,
   validateMcpLaunchSpec,
   type McpLaunchSpec
-} from "../src/client-config.js";
+} from "../src/clients/client-config.js";
 
 const spec: McpLaunchSpec = {
   command: "/opt/BrowseWeave Runtime/node",

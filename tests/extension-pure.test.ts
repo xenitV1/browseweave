@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isComposedDescendant, queryAllOpenElements } from "../extension/src/dom-utils";
+import { isComposedDescendant, queryAllOpenElements } from "../extension/src/shared/dom-utils";
 import {
   BRIDGE_URL,
   MAX_MANAGED_TABS,
@@ -37,7 +37,7 @@ import {
   stableSafetyMaterial,
   shouldKeepPlainTextCandidate,
   validateFillValue
-} from "../extension/src/pure";
+} from "../extension/src/shared/pure";
 
 describe("BrowseWeave extension pure safety functions", () => {
   it("pins the bridge address to the loopback WebSocket", () => {

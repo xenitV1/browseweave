@@ -10,7 +10,7 @@ import {
   type ExtensionHello,
   type P256PublicJwk,
   type SetupAuthenticationPhase
-} from "../../src/protocol";
+} from "../../../src/core/protocol";
 
 const NONCE_BYTES = 32;
 const HMAC_SHA256_BASE64URL_LENGTH = 43;
@@ -151,7 +151,7 @@ export class ExtensionHandshake {
       identity: this.identity,
       public_key: this.publicKey
     };
-    if (this.stagedSetupId !== undefined) {
+    if (this.stagedSetupId !== undefined && this.stagedSetupPhase !== undefined) {
       hello.authentication_mode = "derived-v1";
       hello.setup_id = this.stagedSetupId;
       hello.setup_phase = this.stagedSetupPhase;

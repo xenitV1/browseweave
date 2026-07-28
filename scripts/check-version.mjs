@@ -10,18 +10,18 @@ export async function assertAppVersion(projectDirectory = defaultProjectDirector
   const packageJson = JSON.parse(await readFile(path.join(projectDirectory, "package.json"), "utf8"));
   parseReleaseVersion(packageJson.version);
 
-  const compiledVersionPath = path.join(projectDirectory, "dist", "src", "version.js");
+  const compiledVersionPath = path.join(projectDirectory, "dist", "src", "core", "version.js");
   const compiledVersion = await import(pathToFileURL(compiledVersionPath).href);
   if (compiledVersion.APP_VERSION !== packageJson.version) {
     throw new Error(
-      `Version mismatch: src/version.ts exports ${JSON.stringify(compiledVersion.APP_VERSION)}, `
+      `Version mismatch: src/core/version.ts exports ${JSON.stringify(compiledVersion.APP_VERSION)}, `
       + `but package.json declares ${JSON.stringify(packageJson.version)}.`
     );
   }
   const expectedBrowserVersion = browserExtensionVersion(packageJson.version);
   if (compiledVersion.BROWSER_EXTENSION_VERSION !== expectedBrowserVersion) {
     throw new Error(
-      `Browser version mismatch: src/version.ts exports ${JSON.stringify(compiledVersion.BROWSER_EXTENSION_VERSION)}, `
+      `Browser version mismatch: src/core/version.ts exports ${JSON.stringify(compiledVersion.BROWSER_EXTENSION_VERSION)}, `
       + `but ${JSON.stringify(packageJson.version)} maps to ${JSON.stringify(expectedBrowserVersion)}.`
     );
   }

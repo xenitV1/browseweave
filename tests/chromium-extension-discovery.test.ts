@@ -2,8 +2,8 @@ import { cp, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverLocalChromiumExtensionOrigins } from "../src/chromium-extension-discovery.js";
-import { APP_VERSION, BROWSER_EXTENSION_VERSION } from "../src/version.js";
+import { discoverLocalChromiumExtensionOrigins } from "../src/setup/chromium-extension-discovery.js";
+import { APP_VERSION, BROWSER_EXTENSION_VERSION } from "../src/core/version.js";
 
 const roots: string[] = [];
 const FIRST_ID = "abcdefghijklmnopabcdefghijklmnop";

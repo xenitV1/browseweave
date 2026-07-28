@@ -3,8 +3,8 @@ import {
   DEFAULT_IPC_HOST,
   DEFAULT_IPC_PORT,
   DEFAULT_WS_PORT
-} from "./config.js";
-import { PROTOCOL_VERSION, isJsonObject, type JsonObject } from "./protocol.js";
+} from "../core/config.js";
+import { PROTOCOL_VERSION, isJsonObject, type JsonObject } from "../core/protocol.js";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 1_000;
 const DEFAULT_HEALTH_TIMEOUT_MS = 12_000;

@@ -19,6 +19,12 @@ const trustedReleaseMode = releaseFlag === "1";
 const bootstrapReleaseMode = releaseFlag === "bootstrap-local";
 const releaseMode = trustedReleaseMode || bootstrapReleaseMode;
 const publishIntent = process.argv.includes("--publish");
+const expectedBins = {
+  browseweave: "dist/src/cli.js",
+  "browseweave-mcp": "dist/src/mcp.js",
+  "browseweave-daemon": "dist/src/daemon.js",
+  "browseweave-native-host": "dist/src/native-host.js"
+};
 const requiredFiles = new Set([
   "LICENSE",
   "README.md",
@@ -34,32 +40,37 @@ const requiredFiles = new Set([
   "assets/brand/browseweave-logo.png",
   "assets/brand/browseweave-mark.png",
   "extension/PRIVACY.md",
-  "dist/src/browser-environment.js",
-  "dist/src/chromium-extension-discovery.js",
+  "dist/src/setup/browser-environment.js",
+  "dist/src/setup/chromium-extension-discovery.js",
   "dist/src/cli.js",
-  "dist/src/client-config.js",
-  "dist/src/config.js",
+  "dist/src/cli/application.js",
+  "dist/src/clients/client-config.js",
+  "dist/src/core/config.js",
+  "dist/src/core/entrypoint.js",
   "dist/src/daemon.js",
-  "dist/src/ipc-client.js",
+  "dist/src/daemon/runtime.js",
+  "dist/src/bridge/ipc-client.js",
   "dist/src/mcp.js",
   "dist/src/mcp.d.ts",
-  "dist/src/native-bootstrap.js",
-  "dist/src/native-host-config.js",
-  "dist/src/native-host-install.js",
-  "dist/src/native-host-plan.js",
+  "dist/src/mcp/server.js",
+  "dist/src/native/bootstrap.js",
+  "dist/src/native/host-config.js",
+  "dist/src/native/host-install.js",
+  "dist/src/native/host-plan.js",
   "dist/src/native-host.js",
-  "dist/src/native-service.js",
-  "dist/src/native-setup-protocol.js",
-  "dist/src/npm-invocation.js",
-  "dist/src/protocol.js",
-  "dist/src/purge-data.js",
-  "dist/src/purge-data.d.ts",
-  "dist/src/service-install-guard.js",
-  "dist/src/service-plan.js",
-  "dist/src/setup-flow.js",
-  "dist/src/setup-status.js",
-  "dist/src/version.js",
-  "dist/src/zen-flatpak.js",
+  "dist/src/native/host.js",
+  "dist/src/native/service.js",
+  "dist/src/native/setup-protocol.js",
+  "dist/src/clients/npm-invocation.js",
+  "dist/src/core/protocol.js",
+  "dist/src/native/purge-data.js",
+  "dist/src/native/purge-data.d.ts",
+  "dist/src/native/service-install-guard.js",
+  "dist/src/native/service-plan.js",
+  "dist/src/setup/flow.js",
+  "dist/src/bridge/setup-status.js",
+  "dist/src/core/version.js",
+  "dist/src/setup/zen-flatpak.js",
   "extension/dist/firefox-mv2/manifest.json",
   "extension/dist/firefox-mv2/background.js",
   "extension/dist/firefox-mv2/content.js",
@@ -143,12 +154,6 @@ function assertMetadata() {
     fail("public registry/provenance publishConfig is incomplete");
   }
   if (!Array.isArray(packageJson.files) || packageJson.files.length === 0) fail("an explicit files allowlist is required");
-  const expectedBins = {
-    browseweave: "dist/src/cli.js",
-    "browseweave-mcp": "dist/src/mcp.js",
-    "browseweave-daemon": "dist/src/daemon.js",
-    "browseweave-native-host": "dist/src/native-host.js"
-  };
   if (JSON.stringify(packageJson.bin) !== JSON.stringify(expectedBins)) fail("public executable mapping is unexpected");
   if (packageJson.main !== "dist/src/mcp.js" || packageJson.types !== "dist/src/mcp.d.ts" || packageJson.type !== "module") {
     fail("public module metadata is unexpected");
@@ -188,7 +193,7 @@ function allowedPackPath(filePath) {
   if (filePath === "extension/PRIVACY.md") return true;
   if (/^extension\/dist\/(?:firefox-mv2|chromium-mv3)\/LICENSE$/u.test(filePath)) return true;
   if (/^assets\/brand\/browseweave-(?:logo|mark)\.png$/u.test(filePath)) return true;
-  if (/^dist\/src\/[a-z0-9-]+\.(?:js|d\.ts)$/u.test(filePath)) return true;
+  if (/^dist\/src\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.(?:js|d\.ts)$/u.test(filePath)) return true;
   return /^extension\/dist\/(?:firefox-mv2|chromium-mv3)\/(?:[a-z0-9_-]+\/)*[a-z0-9_.-]+\.(?:js|json|html|css|png|md)$/iu.test(filePath);
 }
 
@@ -266,8 +271,12 @@ async function inspectPack() {
     }
   }
 
-  const nativeHost = await readFile(path.join(projectDirectory, "dist", "src", "native-host.js"), "utf8");
-  if (!nativeHost.startsWith("#!/usr/bin/env node\n")) fail("native host executable is missing its Node.js launcher line");
+  for (const executablePath of Object.values(expectedBins)) {
+    const executable = await readFile(path.join(projectDirectory, executablePath), "utf8");
+    if (!executable.startsWith("#!/usr/bin/env node\n")) {
+      fail(`public executable is missing its Node.js launcher line: ${executablePath}`);
+    }
+  }
 
   const extensionPermissions = new Map([
     ["firefox-mv2", ["<all_urls>", "tabs", "webNavigation", "storage", "nativeMessaging"]],

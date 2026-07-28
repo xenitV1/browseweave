@@ -2,14 +2,14 @@ import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getIpcToken, getPairingToken, getRuntimePaths } from "../src/config.js";
+import { getIpcToken, getPairingToken, getRuntimePaths } from "../src/core/config.js";
 import {
   SafeAuditLogger,
   canonicalJson,
   isAllowedExtensionOrigin,
   parseIpcRequest
 } from "../src/daemon.js";
-import { PROTOCOL_VERSION } from "../src/protocol.js";
+import { PROTOCOL_VERSION } from "../src/core/protocol.js";
 
 const temporaryDirectories: string[] = [];
 const itPosix = process.platform === "win32" ? it.skip : it;

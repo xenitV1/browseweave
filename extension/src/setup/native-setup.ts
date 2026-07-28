@@ -119,7 +119,10 @@ export function nativeSetupErrorMessage(code: NativeSetupErrorCode): string {
   return "BrowseWeave could not complete the local setup. No pairing key was saved.";
 }
 
-export function withNativeSetupTimeout<T>(operation: Promise<T>, timeoutMs = NATIVE_SETUP_REQUEST_TIMEOUT_MS): Promise<T> {
+export function withNativeSetupTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number = NATIVE_SETUP_REQUEST_TIMEOUT_MS
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false;
     const timeout = globalThis.setTimeout(() => {

@@ -1,5 +1,5 @@
 export const BRIDGE_URL = "ws://127.0.0.1:32110" as const;
-export { PROTOCOL_VERSION } from "../../src/protocol";
+export { PROTOCOL_VERSION } from "../../../src/core/protocol";
 export const TOKEN_STORAGE_KEY = "bridge_token" as const;
 export const INSTALLATION_ID_STORAGE_KEY = "installation_id" as const;
 export const MAX_MANAGED_TABS = 10 as const;

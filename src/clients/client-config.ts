@@ -75,7 +75,7 @@ export function validateMcpLaunchSpec(spec: McpLaunchSpec): McpLaunchSpec {
 export function defaultMcpLaunchSpec(): McpLaunchSpec {
   return validateMcpLaunchSpec({
     command: process.execPath,
-    args: [fileURLToPath(new URL("./mcp.js", import.meta.url))],
+    args: [fileURLToPath(new URL("../mcp.js", import.meta.url))],
     env: {}
   });
 }

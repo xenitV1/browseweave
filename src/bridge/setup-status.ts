@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION } from "./protocol.js";
+import { PROTOCOL_VERSION } from "../core/protocol.js";
 
 export interface SetupBrowserStatus {
   browser_id: string;

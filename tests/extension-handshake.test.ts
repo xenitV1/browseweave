@@ -3,14 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   ExtensionHandshake,
   hmacSha256Base64Url
-} from "../extension/src/handshake";
+} from "../extension/src/security/handshake";
 import {
   PROTOCOL_VERSION,
   extensionClientProofPayload,
   extensionServerProofPayload,
   type BrowserIdentity,
   type P256PublicJwk
-} from "../src/protocol";
+} from "../src/core/protocol";
 
 const PAIRING_SECRET = "pairing-secret-with-utf8-ç-0123456789";
 const ORIGIN = "moz-extension://12345678-abcd-4321-abcd-1234567890ab";

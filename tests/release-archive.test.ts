@@ -57,11 +57,16 @@ describe("fixed npm release archive verification", () => {
       "SUPPORT.md",
       "CODE_OF_CONDUCT.md",
       "CONTRIBUTING.md",
-      "dist/src/chromium-extension-discovery.js",
-      "dist/src/zen-flatpak.js",
+      "dist/src/setup/chromium-extension-discovery.js",
+      "dist/src/cli/application.js",
+      "dist/src/core/entrypoint.js",
+      "dist/src/daemon/runtime.js",
+      "dist/src/setup/zen-flatpak.js",
       "dist/src/mcp.d.ts",
-      "dist/src/purge-data.js",
-      "dist/src/purge-data.d.ts"
+      "dist/src/mcp/server.js",
+      "dist/src/native/host.js",
+      "dist/src/native/purge-data.js",
+      "dist/src/native/purge-data.d.ts"
     ];
     const extensionSuffixes = [
       "manifest.json",

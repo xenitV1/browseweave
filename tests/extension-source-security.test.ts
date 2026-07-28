@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const background = readFileSync(new URL("../extension/src/background.ts", import.meta.url), "utf8");
-const content = readFileSync(new URL("../extension/src/content.ts", import.meta.url), "utf8");
-const popupSource = readFileSync(new URL("../extension/src/popup.ts", import.meta.url), "utf8");
-const optionsSource = readFileSync(new URL("../extension/src/options.ts", import.meta.url), "utf8");
+const background = readFileSync(new URL("../extension/src/background/runtime.ts", import.meta.url), "utf8");
+const content = readFileSync(new URL("../extension/src/content/runtime.ts", import.meta.url), "utf8");
+const popupSource = readFileSync(new URL("../extension/src/ui/popup.ts", import.meta.url), "utf8");
+const optionsSource = readFileSync(new URL("../extension/src/ui/options.ts", import.meta.url), "utf8");
 const popupHtml = readFileSync(new URL("../extension/popup.html", import.meta.url), "utf8");
 const optionsHtml = readFileSync(new URL("../extension/options.html", import.meta.url), "utf8");
 

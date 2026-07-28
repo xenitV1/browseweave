@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { APP_VERSION, BROWSER_EXTENSION_VERSION } from "../src/version.js";
+import { APP_VERSION, BROWSER_EXTENSION_VERSION } from "../src/core/version.js";
 import { browserExtensionVersion, releaseDistTag } from "../scripts/version-helpers.mjs";
 
 describe("application version", () => {

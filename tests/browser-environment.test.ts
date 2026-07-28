@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { browserLaunchEnvironment, browserSystemPath } from "../src/browser-environment.js";
+import { browserLaunchEnvironment, browserSystemPath } from "../src/setup/browser-environment.js";
 
 describe("browser launch environment", () => {
   it("replaces an npm or project-controlled Linux PATH while preserving desktop session values", () => {

@@ -11,8 +11,8 @@ import {
   windowsNativeHostRegistryState,
   type NativeHostRegistrationPlanInput,
   type WindowsNativeHostRegistrySpec
-} from "../src/native-host-plan.js";
-import { NATIVE_SETUP_HOST_NAME } from "../src/native-setup-protocol.js";
+} from "../src/native/host-plan.js";
+import { NATIVE_SETUP_HOST_NAME } from "../src/native/setup-protocol.js";
 
 const FIREFOX_ID_A = "browseweave@local.invalid";
 const FIREFOX_ID_B = "addon@example.invalid";

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { NATIVE_SETUP_TTL_MS, createNativeSetupOperations } from "../src/native-bootstrap.js";
+import { NATIVE_SETUP_TTL_MS, createNativeSetupOperations } from "../src/native/bootstrap.js";
 
 const NOW = Date.parse("2026-07-28T12:00:00.000Z");
 const SETUP_ID = "a".repeat(24);

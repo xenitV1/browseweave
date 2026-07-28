@@ -6,7 +6,7 @@ import {
   nativeSetupErrorMessage,
   parseNativeSetupBeginResponse,
   withNativeSetupTimeout
-} from "../extension/src/native-setup";
+} from "../extension/src/setup/native-setup";
 
 const NOW = Date.parse("2026-07-28T12:00:00.000Z");
 const SETUP_ID = "0123456789abcdef01234567";

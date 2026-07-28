@@ -4,7 +4,7 @@ import { userInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { callBridge } from "./ipc-client.js";
+import { callBridge } from "../bridge/ipc-client.js";
 import {
   createServicePlan,
   matchesWindowsTask,
@@ -164,7 +164,7 @@ export async function currentNativeServicePlan(
     throw new Error("BrowseWeave native setup does not run as root.");
   }
   const accountHome = safeAbsoluteHome(platform);
-  const daemonPath = fileURLToPath(new URL("./daemon.js", import.meta.url));
+  const daemonPath = fileURLToPath(new URL("../daemon.js", import.meta.url));
   const currentUserId = await windowsSid(platform, env);
   return createServicePlan({
     platform,

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { APP_VERSION } from "../src/version.js";
+import { APP_VERSION } from "../src/core/version.js";
 
 const cli = fileURLToPath(new URL("../dist/src/cli.js", import.meta.url));
 

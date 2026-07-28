@@ -2,8 +2,8 @@ import { chmod, lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { installNativeHostRegistration, uninstallNativeHostRegistration } from "../src/native-host-install.js";
-import { createNativeHostRegistrationPlan } from "../src/native-host-plan.js";
+import { installNativeHostRegistration, uninstallNativeHostRegistration } from "../src/native/host-install.js";
+import { createNativeHostRegistrationPlan } from "../src/native/host-plan.js";
 
 const roots: string[] = [];
 const describePosix = process.platform === "win32" ? describe.skip : describe;

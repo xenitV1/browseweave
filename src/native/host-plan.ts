@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { NATIVE_SETUP_HOST_NAME } from "./native-setup-protocol.js";
+import { NATIVE_SETUP_HOST_NAME } from "./setup-protocol.js";
 
 export const NATIVE_HOST_DESCRIPTION = "BrowseWeave secure local setup bridge" as const;
 export const NATIVE_HOST_LAUNCHER_MARKER =

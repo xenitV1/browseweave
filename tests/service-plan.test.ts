@@ -9,7 +9,7 @@ import {
   quoteWindowsArgument,
   serviceInstallCommands,
   serviceDefinitionState
-} from "../src/service-plan.js";
+} from "../src/native/service-plan.js";
 
 describe("cross-platform per-user daemon service plans", () => {
   it("rejects terminal-only service credentials, ports, and mismatched Linux XDG paths", () => {

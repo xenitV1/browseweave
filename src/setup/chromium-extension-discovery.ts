@@ -3,8 +3,8 @@ import { lstat, open, readdir, readFile } from "node:fs/promises";
 import { userInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extensionTreeDigest } from "./setup-flow.js";
-import { APP_VERSION, BROWSER_EXTENSION_VERSION } from "./version.js";
+import { extensionTreeDigest } from "./flow.js";
+import { APP_VERSION, BROWSER_EXTENSION_VERSION } from "../core/version.js";
 
 const CHROMIUM_EXTENSION_ID_PATTERN = /^[a-p]{32}$/u;
 const MAX_PREFERENCES_BYTES = 32 * 1024 * 1024;
@@ -144,7 +144,7 @@ export async function discoverLocalChromiumExtensionOrigins(
   }
   const chromeUserData = pathApi.normalize(input.chromeUserData ?? chromeUserDataPath(platform, home));
   const expectedExtensionPath = pathApi.normalize(
-    input.expectedExtensionPath ?? fileURLToPath(new URL("../../extension/dist/chromium-mv3/", import.meta.url))
+    input.expectedExtensionPath ?? fileURLToPath(new URL("../../../extension/dist/chromium-mv3/", import.meta.url))
   );
   const managedExtensionPath = pathApi.normalize(managedChromiumExtensionPath(platform, home));
   if (

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { callBridge } from "../dist/src/ipc-client.js";
+import { callBridge } from "../dist/src/bridge/ipc-client.js";
 
 const FIXTURE_URL = "http://127.0.0.1:41731/interaction.html";
 const checks = [];

@@ -23,9 +23,9 @@ import {
   MAX_PENDING_COMMANDS,
   MAX_WS_PAYLOAD_BYTES,
   type DaemonConfig
-} from "../src/config.js";
+} from "../src/core/config.js";
 import { BrowseWeaveDaemon } from "../src/daemon.js";
-import { callBridge } from "../src/ipc-client.js";
+import { callBridge } from "../src/bridge/ipc-client.js";
 import {
   PROTOCOL_VERSION,
   SETUP_VERSION,
@@ -45,7 +45,7 @@ import {
   type JsonObject,
   type P256PublicJwk,
   type SetupPairingResponse
-} from "../src/protocol.js";
+} from "../src/core/protocol.js";
 
 const TOKEN = "a".repeat(64);
 const IPC_TOKEN = "b".repeat(64);

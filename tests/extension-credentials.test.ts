@@ -12,7 +12,7 @@ import {
   validateCredentialCommandPayload,
   type LocalCredentialHandoff,
   type RemoteCredentialPermission
-} from "../extension/src/credentials";
+} from "../extension/src/security/credentials";
 
 const NOW = Date.parse("2030-01-01T00:00:00.000Z");
 const SECRET_SENTINEL = "BW_SECRET_SENTINEL_DO_NOT_LEAK";

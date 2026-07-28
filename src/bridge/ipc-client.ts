@@ -11,7 +11,7 @@ import {
   DEFAULT_IPC_PORT,
   getIpcToken,
   getRuntimePaths
-} from "./config.js";
+} from "../core/config.js";
 import {
   PROTOCOL_VERSION,
   canonicalJson,
@@ -24,7 +24,7 @@ import {
   type IpcResponse,
   type IpcServerChallenge,
   type JsonObject
-} from "./protocol.js";
+} from "../core/protocol.js";
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_RESPONSE_BYTES = 25 * 1024 * 1024;

@@ -18,7 +18,7 @@ import {
   type NativeCallerPolicy,
   type NativeSetupOperations,
   type NativeSetupResponse
-} from "../src/native-setup-protocol.js";
+} from "../src/native/setup-protocol.js";
 
 const NOW = Date.parse("2026-07-28T12:00:00.000Z");
 const SETUP_ID = "a".repeat(24);
