@@ -173,4 +173,36 @@ describe("trusted npm invocation", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("allows client-owned config writes below an executable ancestor without weakening directory trust", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "browseweave-client-config-write-"));
+    const home = path.join(root, "home");
+    const clientHome = path.join(home, ".codex");
+    const safeBin = path.join(clientHome, "bin");
+    const executableName = process.platform === "win32" ? "codex.exe" : "codex";
+    try {
+      await mkdir(safeBin, { recursive: true });
+      await writeFile(path.join(safeBin, executableName), "trusted client", "utf8");
+      if (process.platform !== "win32") await chmod(path.join(safeBin, executableName), 0o755);
+
+      const trusted = await resolveTrustedClientExecutable("codex", {
+        env: process.platform === "win32"
+          ? { Path: safeBin, LOCALAPPDATA: path.join(home, "AppData", "Local") }
+          : { PATH: safeBin },
+        cwd: home,
+        home,
+        temporaryDirectory: path.join(root, "blocked-temporary-root")
+      });
+
+      await writeFile(path.join(clientHome, "config.toml"), "[mcp_servers.browseweave]\n", "utf8");
+      await expect(assertTrustedClientExecutableUnchanged(trusted!)).resolves.toBeUndefined();
+
+      if (process.platform !== "win32") {
+        await chmod(safeBin, 0o777);
+        await expect(assertTrustedClientExecutableUnchanged(trusted!)).rejects.toThrow(/directory chain changed/iu);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

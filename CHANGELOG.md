@@ -6,10 +6,18 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.2] - 2026-07-28
+
+Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
 ### Changed
 
 - Reorganized the Node.js runtime and browser extension into explicit domain modules with thin, stable executable facades.
 - Added an automated architecture gate for module layout, dependency direction, cycle detection, shared contracts, and source-size budgets.
+
+### Fixed
+
+- Allowed trusted MCP clients such as Codex to update configuration beneath their own installation directory without triggering a false directory-replacement warning; executable identity, directory inode, ownership, and permission checks remain enforced.
 
 ## [0.1.0-beta.1] - 2026-07-28
 
@@ -45,5 +53,6 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.1...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.2...HEAD
+[0.1.0-beta.2]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/xenitV1/browseweave/releases/tag/v0.1.0-beta.1

@@ -151,6 +151,17 @@ function identitiesMatch(
     && left.gid === right.gid;
 }
 
+function directoryIdentitiesMatch(
+  left: TrustedFileSystemIdentity,
+  right: TrustedFileSystemIdentity
+): boolean {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.mode === right.mode
+    && left.uid === right.uid
+    && left.gid === right.gid;
+}
+
 function pathsFromAnchor(anchor: string, target: string, pathApi: PathApi): string[] {
   const relative = pathApi.relative(anchor, target);
   if (relative === "") return [anchor];
@@ -306,7 +317,12 @@ export async function assertTrustedClientExecutableUnchanged(trusted: TrustedCli
     const directoryInfo = await lstat(directory.path).catch(() => undefined);
     if (directoryCanonical !== directory.path || !directoryInfo
       || !directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()
-      || !identitiesMatch(directory.identity, trustedFileSystemIdentity(directoryInfo))) {
+      // A client may legitimately update configuration below one of its own
+      // executable ancestors (for example, Codex writes ~/.codex/config.toml).
+      // Directory size and mtime therefore are not stable identity fields.
+      // Keep pinning the directory inode, ownership, and permissions so a
+      // replacement or trust-boundary change still fails closed.
+      || !directoryIdentitiesMatch(directory.identity, trustedFileSystemIdentity(directoryInfo))) {
       throw new Error(`${trusted.name} directory chain changed after it was selected.`);
     }
   }
