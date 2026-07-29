@@ -1,11 +1,29 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { APP_VERSION } from "../src/core/version.js";
 
 const cli = fileURLToPath(new URL("../dist/src/cli.js", import.meta.url));
 
 describe("public CLI surface", () => {
+  it("starts the versioned MCP server through the npm-facing CLI subcommand", async () => {
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [cli, "mcp"],
+      stderr: "pipe"
+    });
+    const client = new Client({ name: "browseweave-cli-test", version: "0.1.0" });
+    try {
+      await client.connect(transport);
+      expect(client.getServerVersion()).toEqual({ name: "browseweave", version: APP_VERSION });
+      expect((await client.listTools()).tools.length).toBeGreaterThanOrEqual(22);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("keeps guided setup public without exposing a pairing-token command", () => {
     const result = spawnSync(process.execPath, [cli, "--help"], {
       encoding: "utf8",

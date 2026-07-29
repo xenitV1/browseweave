@@ -6,6 +6,20 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.6] - 2026-07-29
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
+### Changed
+
+- Guided setup continues to detect installed Codex, Claude Code, Cursor, and OpenCode clients before browser consent, but now normalizes every managed registration to the trusted `browseweave@latest` npm invocation. Exact older persistent-runtime entries and the legacy `browseweave-mcp` npm-bin form are migrated; unrelated or ambiguous entries remain untouched.
+- OpenCode setup now checks both the XDG user configuration and an existing home-level `.opencode/opencode.json` or JSONC overlay. A verified older BrowseWeave entry in either location is upgraded so it cannot shadow the npm-backed global registration.
+
+### Fixed
+
+- Added the missing npm-facing `browseweave mcp` CLI subcommand used by generated Codex, Claude Code, Cursor, and OpenCode registrations. The command now starts the versioned stdio MCP server instead of exiting with `Unknown command: mcp` and surfacing as `Connection closed`.
+- Increased the bounded Codex MCP-list verification window from 10 to 30 seconds so a valid standalone Codex installation is not misclassified during first setup on a busy machine.
+
 ## [0.1.0-beta.5] - 2026-07-29
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
@@ -105,7 +119,8 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.5...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.6...HEAD
+[0.1.0-beta.6]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.5...v0.1.0-beta.6
 [0.1.0-beta.5]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.4...v0.1.0-beta.5
 [0.1.0-beta.4]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.3...v0.1.0-beta.4
 [0.1.0-beta.3]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.2...v0.1.0-beta.3

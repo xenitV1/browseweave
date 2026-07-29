@@ -85,6 +85,18 @@ export async function defaultMcpLaunchSpec(): Promise<McpLaunchSpec> {
   return validateMcpLaunchSpec({ command: invocation.command, args: invocation.args, env: {} });
 }
 
+/** Exact npm-bin form emitted by older BrowseWeave releases and safe to migrate. */
+export async function legacyNpmMcpLaunchSpec(): Promise<McpLaunchSpec> {
+  const invocation = await trustedNpmInvocation([
+    "exec",
+    "--yes",
+    "--package=browseweave@latest",
+    "--",
+    "browseweave-mcp"
+  ]);
+  return validateMcpLaunchSpec({ command: invocation.command, args: invocation.args, env: {} });
+}
+
 function stdioEntry(spec: McpLaunchSpec): Record<string, unknown> {
   return { command: spec.command, args: [...spec.args], env: {} };
 }
@@ -633,6 +645,18 @@ function openCodeServersForVersion(value: Record<string, unknown>, version: 1 | 
     assertOpenCodeServerEntry(entry, 2, `OpenCode V2 mcp.servers.${name}`);
   }
   return rawMcp.servers;
+}
+
+export function openCodeRegistrationState(
+  value: unknown,
+  rawSpec: McpLaunchSpec,
+  version: 1 | 2
+): RegistrationState {
+  if (!isRecord(value)) throw new Error("OpenCode configuration root must be an object.");
+  const servers = openCodeServersForVersion(value, version);
+  const existing = servers[MCP_SERVER_NAME];
+  if (existing === undefined) return "absent";
+  return deepExact(existing, openCodeEntry(validateMcpLaunchSpec(rawSpec), version)) ? "exact" : "foreign";
 }
 
 export async function mergeOpenCodeConfig(

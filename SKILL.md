@@ -46,7 +46,7 @@ The explicit `setup`, `local-install`, and `mcp-add` commands install the focuse
 Use the exact public beta version:
 
 ```bash
-npx browseweave@0.1.0-beta.5 setup --browser chrome --client codex
+npx browseweave@0.1.0-beta.6 setup --browser chrome --client codex
 ```
 
 When the user explicitly wants every installed supported browser and every
@@ -60,9 +60,9 @@ repository-owned sequential all-browser flow:
 Pin the user's requested targets when needed:
 
 ```bash
-npx browseweave@0.1.0-beta.5 setup --browser chrome --client codex
-npx browseweave@0.1.0-beta.5 setup --browser zen --client claude-code --client cursor
-npx browseweave@0.1.0-beta.5 setup --browser chrome --client opencode --opencode-v2
+npx browseweave@0.1.0-beta.6 setup --browser chrome --client codex
+npx browseweave@0.1.0-beta.6 setup --browser zen --client claude-code --client cursor
+npx browseweave@0.1.0-beta.6 setup --browser chrome --client opencode --opencode-v2
 ```
 
 - Pass `--browser chrome` or `--browser zen` only after identifying the user's intended browser.
@@ -73,7 +73,7 @@ npx browseweave@0.1.0-beta.5 setup --browser chrome --client opencode --opencode
 - Ask which browser/client the user wants and pass explicit flags. Use `--all-browsers` only when the user asks for every installed supported browser. Without either browser-selection flag, setup prefers Chrome when both browsers exist; without `--client`, it attempts every supported client it detects.
 - Do not run `npm login`. Do not replace setup with a global npm install.
 - Require setup to preserve unrelated client configuration and refuse foreign or ambiguous `browseweave` entries.
-- For another local stdio MCP client, run `npx browseweave@0.1.0-beta.5 mcp-config generic` only after setup, then adapt the command/args entry manually to that client's current official schema. Never claim automatic or verified support for that client.
+- For another local stdio MCP client, run `npx browseweave@0.1.0-beta.6 mcp-config generic` only after setup, then adapt the command/args entry manually to that client's current official schema. Never claim automatic or verified support for that client.
 
 In a verified source checkout, the contributor path is:
 
@@ -131,7 +131,7 @@ Require setup to report success only after the extension completes a normal auth
 If Settings reports that the helper or service is unavailable after successful initial enrollment, run the pinned repair command in a visible terminal:
 
 ```bash
-npx browseweave@0.1.0-beta.5 local-install
+npx browseweave@0.1.0-beta.6 local-install
 ```
 
 From a verified source checkout, rebuild and run:
@@ -154,7 +154,7 @@ In that session:
 4. Call `browser_snapshot` in `interactive` mode on a harmless visible page.
 5. Do not perform a destructive smoke-test action.
 
-If verification fails, run `npx browseweave@0.1.0-beta.5 doctor`, confirm that the extension reports connected, and confirm that the client was restarted. The public command delegates to the exact persistent beta runtime installed by setup. Never rotate or reveal a credential merely to diagnose connectivity.
+If verification fails, run `npx browseweave@0.1.0-beta.6 doctor`, confirm that the extension reports connected, and confirm that the client was restarted. The public command delegates to the exact persistent beta runtime installed by setup. Never rotate or reveal a credential merely to diagnose connectivity.
 
 ## Minimize model context
 
@@ -209,7 +209,7 @@ Never enter OTP, payment-card, recovery-code, CAPTCHA, WebAuthn, or hardware-key
 
 ## Uninstall only with the requested data scope
 
-- For a normal reversible uninstall, run `npx browseweave@0.1.0-beta.5 local-uninstall`. Explain that local configuration, state, runtime files, audit metadata, and the managed extension copy are preserved.
+- For a normal reversible uninstall, run `npx browseweave@0.1.0-beta.6 local-uninstall`. Explain that local configuration, state, runtime files, audit metadata, and the managed extension copy are preserved.
 - Add `--purge-data` only after the user explicitly asks to delete BrowseWeave's local application data and accepts that recovery is not expected. The command removes exact owner-controlled BrowseWeave application directories after uninstalling the service and native registration.
 - Explain that purge cannot remove browser-owned extension storage. The human must remove BrowseWeave separately from Chrome or Zen. The Zen Flatpak portal preference is preserved.
 

@@ -19,8 +19,10 @@ import {
   clientSetup,
   codexRegistrationState,
   defaultMcpLaunchSpec,
+  legacyNpmMcpLaunchSpec,
   mergeCursorConfig,
   mergeOpenCodeConfig,
+  openCodeRegistrationState,
   parseStrictJson,
   readStrictJsonConfig,
   selectOpenCodeVersion,
@@ -106,6 +108,7 @@ Usage:
   npx browseweave@${APP_VERSION} native-host-uninstall
   npx browseweave@${APP_VERSION} local-install
   npx browseweave@${APP_VERSION} local-uninstall [--purge-data]
+  npx browseweave@${APP_VERSION} mcp
   npx browseweave@${APP_VERSION} mcp-config <codex|claude-code|cursor|generic>
   npx browseweave@${APP_VERSION} mcp-config opencode <--opencode-v1|--opencode-v2>
   npx browseweave@${APP_VERSION} mcp-add <codex|claude-code|cursor>
@@ -153,7 +156,7 @@ function decodeCommandOutput(buffer: Buffer): string {
   return buffer.toString("utf8");
 }
 
-async function runCaptured(command: string, args: string[]): Promise<CapturedCommand> {
+async function runCaptured(command: string, args: string[], timeoutMs = 10_000): Promise<CapturedCommand> {
   return await new Promise((resolve, reject) => {
     const child = spawn(command, args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     const stdout: Buffer[] = [];
@@ -164,9 +167,9 @@ async function runCaptured(command: string, args: string[]): Promise<CapturedCom
       child.kill();
       if (!settled) {
         settled = true;
-        reject(new Error(`${command} did not finish within 10 seconds.`));
+        reject(new Error(`${command} did not finish within ${Math.ceil(timeoutMs / 1_000)} seconds.`));
       }
-    }, 10_000);
+    }, timeoutMs);
 
     const rejectOnce = (error: Error): void => {
       if (settled) return;
@@ -218,10 +221,11 @@ function resolvedClientExecutable(name: ClientExecutableName): Promise<TrustedCl
 
 async function runTrustedClientCaptured(
   trusted: TrustedClientExecutable,
-  args: string[]
+  args: string[],
+  timeoutMs?: number
 ): Promise<CapturedCommand> {
   await assertTrustedClientExecutableUnchanged(trusted);
-  return await runCaptured(trusted.executable, args);
+  return await runCaptured(trusted.executable, args, timeoutMs);
 }
 
 async function runTrustedClientCommand(trusted: TrustedClientExecutable, args: string[]): Promise<number> {
@@ -1203,7 +1207,7 @@ async function doctor(): Promise<void> {
 }
 
 async function codexState(spec: McpLaunchSpec, executable: TrustedClientExecutable): Promise<RegistrationState> {
-  const result = await runTrustedClientCaptured(executable, ["mcp", "list", "--json"]);
+  const result = await runTrustedClientCaptured(executable, ["mcp", "list", "--json"], 30_000);
   if (result.code !== 0) throw new Error("Codex MCP configuration could not be verified.");
   return codexRegistrationState(parseStrictJson(result.stdout, "Codex MCP list"), spec);
 }
@@ -1281,17 +1285,8 @@ function cursorConfigPath(): string {
   return path.join(homedir(), ".cursor", "mcp.json");
 }
 
-async function openCodeConfigPath(): Promise<string> {
-  if (process.env.OPENCODE_CONFIG) {
-    if (!path.isAbsolute(process.env.OPENCODE_CONFIG)) throw new Error("OPENCODE_CONFIG must be an absolute file path.");
-    return process.env.OPENCODE_CONFIG;
-  }
-  const configHome = process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config");
-  if (!path.isAbsolute(configHome)) throw new Error("XDG_CONFIG_HOME must be absolute.");
-  const candidates = [
-    path.join(configHome, "opencode", "opencode.json"),
-    path.join(configHome, "opencode", "opencode.jsonc")
-  ];
+async function singleOpenCodeConfigPath(directory: string, label: string): Promise<string | undefined> {
+  const candidates = [path.join(directory, "opencode.json"), path.join(directory, "opencode.jsonc")];
   const existing: string[] = [];
   for (const candidate of candidates) {
     try {
@@ -1303,9 +1298,24 @@ async function openCodeConfigPath(): Promise<string> {
     }
   }
   if (existing.length > 1) {
-    throw new Error("Both OpenCode JSON and JSONC configuration files exist; refusing an ambiguous automatic update.");
+    throw new Error(`Both OpenCode JSON and JSONC configuration files exist in ${label}; refusing an ambiguous automatic update.`);
   }
-  return existing[0] ?? candidates[0]!;
+  return existing[0];
+}
+
+async function openCodeConfigPaths(): Promise<{ primary: string; overlays: string[] }> {
+  if (process.env.OPENCODE_CONFIG) {
+    if (!path.isAbsolute(process.env.OPENCODE_CONFIG)) throw new Error("OPENCODE_CONFIG must be an absolute file path.");
+    return { primary: process.env.OPENCODE_CONFIG, overlays: [] };
+  }
+  const configHome = process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config");
+  if (!path.isAbsolute(configHome)) throw new Error("XDG_CONFIG_HOME must be absolute.");
+  const globalDirectory = path.join(configHome, "opencode");
+  const primary = await singleOpenCodeConfigPath(globalDirectory, globalDirectory)
+    ?? path.join(globalDirectory, "opencode.json");
+  const homeOverlayDirectory = path.join(homedir(), ".opencode");
+  const homeOverlay = await singleOpenCodeConfigPath(homeOverlayDirectory, homeOverlayDirectory);
+  return { primary, overlays: homeOverlay ? [homeOverlay] : [] };
 }
 
 async function resolveInstalledOpenCodeVersion(requestedVersion?: 1 | 2): Promise<1 | 2> {
@@ -1321,7 +1331,10 @@ async function addMcpClient(client: SupportedMcpClient, requestedOpenCodeVersion
   if (client === "generic") {
     throw new Error("Generic clients cannot be edited safely without their exact schema. Use 'browseweave mcp-config generic', review the output, and adapt its command/args entry to the client's official MCP format.");
   }
-  const replaceableSpecs = await installedRuntimeMcpLaunchSpecs();
+  const replaceableSpecs = [
+    ...await installedRuntimeMcpLaunchSpecs(),
+    await legacyNpmMcpLaunchSpec()
+  ];
   if (client === "codex" || client === "claude-code") {
     const status = await addCliManagedClient(client, spec, replaceableSpecs);
     process.stdout.write(`BrowseWeave MCP registration for ${client}: ${status}. Start a new client session, then call browser_status.\n`);
@@ -1333,8 +1346,17 @@ async function addMcpClient(client: SupportedMcpClient, requestedOpenCodeVersion
     return;
   }
   const version = await resolveInstalledOpenCodeVersion(requestedOpenCodeVersion);
-  const result = await mergeOpenCodeConfig(await openCodeConfigPath(), spec, version, replaceableSpecs);
-  process.stdout.write(`BrowseWeave OpenCode V${result.opencodeVersion} MCP configuration: ${result.status} (${result.path}).\n`);
+  const paths = await openCodeConfigPaths();
+  const results = [await mergeOpenCodeConfig(paths.primary, spec, version, replaceableSpecs)];
+  for (const overlay of paths.overlays) {
+    const state = openCodeRegistrationState(await readStrictJsonConfig(overlay), spec, version);
+    if (state !== "absent") {
+      results.push(await mergeOpenCodeConfig(overlay, spec, version, replaceableSpecs));
+    }
+  }
+  for (const result of results) {
+    process.stdout.write(`BrowseWeave OpenCode V${result.opencodeVersion} MCP configuration: ${result.status} (${result.path}).\n`);
+  }
 }
 
 async function daemonBrowsersWithRetry(timeoutMs = 10_000): Promise<SetupBrowserStatus[]> {
@@ -1704,6 +1726,12 @@ export async function main(): Promise<void> {
     return;
   }
   if (command !== "setup" && await handOffCommandToPersistentInstall(commandArgs)) return;
+  if (command === "mcp") {
+    if (arg !== undefined || rest.length > 0) throw new Error("mcp does not accept arguments.");
+    const { main: runMcpServer } = await import("../mcp/server.js");
+    await runMcpServer();
+    return;
+  }
   if (command === "doctor") {
     await doctor();
     return;

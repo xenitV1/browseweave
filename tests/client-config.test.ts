@@ -8,8 +8,10 @@ import {
   clientSetup,
   codexRegistrationState,
   defaultMcpLaunchSpec,
+  legacyNpmMcpLaunchSpec,
   mergeCursorConfig,
   mergeOpenCodeConfig,
+  openCodeRegistrationState,
   parseStrictJson,
   selectOpenCodeVersion,
   serializeClientSetup,
@@ -48,6 +50,15 @@ describe("vendor-neutral MCP client setup", () => {
       "exec", "--yes", "--package=browseweave@latest", "--", "browseweave", "mcp"
     ]);
     expect(latest.env).toEqual({});
+  });
+
+  it("recognizes only the exact legacy npm-bin form as a migration candidate", async () => {
+    const legacyNpm = await legacyNpmMcpLaunchSpec();
+    expect(path.isAbsolute(legacyNpm.command)).toBe(true);
+    expect(legacyNpm.args.slice(-5)).toEqual([
+      "exec", "--yes", "--package=browseweave@latest", "--", "browseweave-mcp"
+    ]);
+    expect(legacyNpm.env).toEqual({});
   });
 
   it("builds argument arrays for Codex and Claude Code without shell quoting", () => {
@@ -237,6 +248,15 @@ describe("safe direct MCP configuration merges", () => {
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
       mcp: { browseweave: { type: "local", command: [spec.command, ...spec.args], enabled: true } }
     });
+  });
+
+  it("classifies OpenCode overlays before deciding whether to migrate them", () => {
+    const exact = { mcp: { browseweave: { type: "local", command: [spec.command, ...spec.args], enabled: true } } };
+    expect(openCodeRegistrationState({}, spec, 1)).toBe("absent");
+    expect(openCodeRegistrationState(exact, spec, 1)).toBe("exact");
+    expect(openCodeRegistrationState({
+      mcp: { browseweave: { type: "local", command: [legacySpec.command, ...legacySpec.args], enabled: true } }
+    }, spec, 1)).toBe("foreign");
   });
 
   it("selects OpenCode generation from executable names and requires a flag for conflicts or no binary", () => {
