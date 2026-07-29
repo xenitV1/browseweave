@@ -1,20 +1,15 @@
 import {
   BRIDGE_URL,
-  INSTALLATION_ID_STORAGE_KEY,
   MAX_MANAGED_TABS,
   TOKEN_STORAGE_KEY,
   approvalGuardDecision,
   approvalFingerprint,
-  canCreateManagedTab,
   captureImageDimensions,
   classifyRisk,
   diffSnapshots,
   externalNavigationRisk,
-  isManagedTabOwned,
-  managedTabsAfterClose,
   maskUntrustedApprovalDescription,
   mutationIntervalMs,
-  normalizeManagedTabIds,
   normalizeNavigationUrl,
   normalizePagination,
   normalizeScreenshotOptions,
@@ -24,8 +19,6 @@ import {
   normalizeWaitOptions,
   redactUrl,
   sameViewportState,
-  selectChromiumBrand,
-  selectManagedTabsForCleanup,
   type ViewportState
 } from "../shared/pure";
 import {
@@ -36,10 +29,8 @@ import {
   approvalDecisionSigningPayload,
   isApprovalFingerprint,
   isBrowserAction,
-  isInstallationId,
   isJsonObject,
   isJsonValue,
-  isP256PublicJwk,
   type ApprovalDecision,
   type BrowserAction,
   type BrowserIdentity,
@@ -47,7 +38,6 @@ import {
   type JsonObject,
   type P256PublicJwk
 } from "../../../src/core/protocol";
-import { APP_VERSION } from "../../../src/core/version";
 import {
   ApprovalGrantLedger,
   MAX_LOCAL_APPROVAL_GRANTS,
@@ -81,14 +71,7 @@ import {
 import {
   DEFAULT_REMOTE_CREDENTIAL_PERMISSION_MS,
   LOCAL_CREDENTIAL_HANDOFF_TTL_MS,
-  MAX_CREDENTIAL_HANDOFFS,
-  MAX_REMOTE_CREDENTIAL_PERMISSION_MS,
-  MAX_REMOTE_CREDENTIAL_PERMISSIONS,
-  LocalCredentialHandoffLedger,
-  RemoteCredentialPermissionLedger,
   credentialGrantTargetMatches,
-  isLocalCredentialHandoff,
-  isRemoteCredentialPermission,
   normalizeHttpsOrigin,
   scrubCredentialValues,
   validateCredentialCommandPayload,
@@ -99,43 +82,40 @@ import {
   type RemoteCredentialField,
   type RemoteCredentialPermission
 } from "../security/credentials";
+import {
+  BridgeError,
+  activeTab,
+  extensionAction,
+  extensionBrowser,
+  sessionStorageArea,
+  tabId,
+  targetTab,
+  windowId,
+  type CrossBrowserApi
+} from "./environment";
+import {
+  cleanupManagedTabs,
+  createManagedTab,
+  isManagedTab,
+  managedTabsSummary,
+  managedTabCount,
+  untrackManagedTab
+} from "./managed-tabs";
+import {
+  consumeLocalCredentialHandoff,
+  consumeRemoteCredentialPermission,
+  createRemoteCredentialPermission,
+  listLocalCredentialHandoffs,
+  listRemoteCredentialPermissions,
+  randomCredentialId,
+  revokeCredentialHandoffsForTab,
+  revokeLocalCredentialHandoff,
+  revokeRemoteCredentialPermission,
+  storeLocalCredentialHandoff
+} from "./credential-store";
+import { browserIdentity, deviceSigningKey, installationId, signPayload } from "./device-identity";
 
-type ExtensionActionApi = {
-  setBadgeBackgroundColor(details: { color: string }): Promise<void>;
-  setBadgeText(details: { text: string }): Promise<void>;
-  setTitle(details: { title: string }): Promise<void>;
-};
-
-type CrossBrowserApi = typeof browser & {
-  action?: ExtensionActionApi;
-  browserAction?: ExtensionActionApi;
-  scripting?: {
-    executeScript(details: {
-      target: { tabId: number; allFrames?: boolean; frameIds?: number[] };
-      files: string[];
-    }): Promise<unknown>;
-  };
-  runtime: typeof browser.runtime & {
-    getBrowserInfo?: () => Promise<{ name: string; vendor: string; version: string; buildID: string }>;
-  };
-  storage: typeof browser.storage & {
-    session?: typeof browser.storage.local;
-  };
-};
-
-const extensionGlobals = globalThis as typeof globalThis & {
-  browser?: typeof browser;
-  chrome?: typeof browser;
-};
-const extensionBrowser: CrossBrowserApi = (() => {
-  const candidate = (extensionGlobals.browser ?? extensionGlobals.chrome) as CrossBrowserApi | undefined;
-  if (!candidate) throw new Error("BrowseWeave could not find the WebExtensions API.");
-  return candidate;
-})();
-
-const extensionAction = extensionBrowser.action ?? extensionBrowser.browserAction;
-
-type ConnectionPhase = "needs_token" | "disconnected" | "connecting" | "authenticating" | "connected" | "error";
+type ConnectionPhase ="needs_token" | "disconnected" | "connecting" | "authenticating" | "connected" | "error";
 
 interface ConnectionState {
   phase: ConnectionPhase;
@@ -221,21 +201,6 @@ interface ContentReply {
   error?: ExtensionErrorPayload;
 }
 
-class BridgeError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-    readonly category?: string,
-    readonly details?: Record<string, unknown>,
-    readonly approvalFingerprint?: string,
-    readonly targetTabId?: number,
-    readonly targetFrameId?: number,
-    readonly localTargetBinding?: string
-  ) {
-    super(message);
-  }
-}
-
 const COMMAND_ACTIONS = new Set([
   ...BROWSER_ACTIONS
 ]);
@@ -254,14 +219,7 @@ const MAX_MUTATION_INTERVAL_MS = 5_000;
 /** How long a tab keeps the conservative pacing after a detected challenge. */
 const MUTATION_STRESS_WINDOW_MS = 60_000;
 const SESSION_STATE_STORAGE_KEY = "browseweave_session_state_v2";
-const MANAGED_TABS_SESSION_KEY = "browseweave_managed_tabs_v1";
 const LOCAL_APPROVAL_GRANTS_SESSION_KEY = "browseweave_local_approval_grants_v2";
-const LOCAL_CREDENTIAL_HANDOFFS_SESSION_KEY = "browseweave_local_credential_handoffs_v1";
-const REMOTE_CREDENTIAL_PERMISSIONS_STORAGE_KEY = "browseweave_remote_credential_permissions_v1";
-const SECURITY_DATABASE_NAME = "browseweave-security-v1";
-const SECURITY_DATABASE_VERSION = 1;
-const SECURITY_STORE_NAME = "device-keys";
-const SECURITY_KEY_ID = "installation-signing-key";
 
 interface SnapshotCacheEntry {
   tabId: number;
@@ -287,7 +245,6 @@ const pausedOrigins = new Map<string, HumanInterventionState["kind"]>();
 const mutationQueues = new Map<number, Promise<void>>();
 const lastMutationFinishedAt = new Map<number, number>();
 const mutationStressUntil = new Map<number, number>();
-const managedTabIds = new Set<number>();
 
 const MUTATING_ACTIONS = new Set<BrowserAction>([
   "hover", "click_at", "click", "type", "fill_form", "credential_fill", "press", "scroll",
@@ -313,19 +270,9 @@ let currentIdentity: BrowserIdentity | null = null;
 let connectionHandshake: ExtensionHandshake | null = null;
 let sessionStateLoaded = false;
 let sessionWriteQueue: Promise<void> = Promise.resolve();
-let managedTabsLoaded = false;
-let managedTabsLock: Promise<void> = Promise.resolve();
 let localApprovalGrantsLoaded = false;
 let localApprovalGrantsLock: Promise<void> = Promise.resolve();
 let localApprovalGrants = new ApprovalGrantLedger();
-let localCredentialHandoffsLoaded = false;
-let localCredentialHandoffsLock: Promise<void> = Promise.resolve();
-let localCredentialHandoffs = new LocalCredentialHandoffLedger();
-let remoteCredentialPermissionsLoaded = false;
-let remoteCredentialPermissionsLock: Promise<void> = Promise.resolve();
-let remoteCredentialPermissions = new RemoteCredentialPermissionLedger();
-let deviceKeyPromise: Promise<{ privateKey: CryptoKey; publicKey: P256PublicJwk }> | undefined;
-let installationIdPromise: Promise<string> | undefined;
 let setupPairingInProgress = false;
 let nativeSetupLaunchInProgress = false;
 let state: ConnectionState = {
@@ -334,10 +281,6 @@ let state: ConnectionState = {
   connectedAt: null,
   reconnectAttempt: 0
 };
-
-function sessionStorageArea(): CrossBrowserApi["storage"]["local"] | undefined {
-  return extensionBrowser.storage.session;
-}
 
 function validSnapshotCacheEntry(value: unknown): value is SnapshotCacheEntry {
   if (!value || typeof value !== "object") return false;
@@ -423,208 +366,6 @@ function persistSessionState(): Promise<void> {
     })
     .catch(() => undefined);
   return sessionWriteQueue;
-}
-
-function managedTabsStateError(message: string, cause?: unknown): BridgeError {
-  return new BridgeError(
-    "managed_tab_state_unavailable",
-    message,
-    undefined,
-    cause === undefined ? undefined : { cause: cause instanceof Error ? cause.message : String(cause) }
-  );
-}
-
-async function withManagedTabsLock<T>(operation: () => Promise<T>): Promise<T> {
-  const previous = managedTabsLock;
-  let release: (() => void) | undefined;
-  managedTabsLock = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous.catch(() => undefined);
-  try {
-    return await operation();
-  } finally {
-    release?.();
-  }
-}
-
-async function ensureManagedTabsLoadedUnlocked(): Promise<void> {
-  if (managedTabsLoaded) return;
-  const area = sessionStorageArea();
-  if (!area) {
-    throw managedTabsStateError(
-      "This browser cannot safely persist BrowseWeave tab ownership across extension-worker restarts. No managed tab was opened."
-    );
-  }
-  let stored: Record<string, unknown>;
-  try {
-    stored = await area.get(MANAGED_TABS_SESSION_KEY);
-  } catch (error) {
-    throw managedTabsStateError("BrowseWeave could not read its managed-tab ownership ledger.", error);
-  }
-  const value = stored[MANAGED_TABS_SESSION_KEY];
-  if (value === undefined) {
-    managedTabsLoaded = true;
-    return;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw managedTabsStateError("The managed-tab ownership ledger is invalid. No tab action was taken.");
-  }
-  const record = value as Record<string, unknown>;
-  const rawIds = record.tab_ids;
-  const normalized = normalizeManagedTabIds(rawIds);
-  if (
-    record.version !== 1 || !Array.isArray(rawIds) || rawIds.length !== normalized.length ||
-    normalized.length > MAX_MANAGED_TABS
-  ) {
-    throw managedTabsStateError("The managed-tab ownership ledger failed integrity checks. No tab action was taken.");
-  }
-  for (const id of normalized) managedTabIds.add(id);
-  managedTabsLoaded = true;
-}
-
-async function persistManagedTabsUnlocked(): Promise<void> {
-  const area = sessionStorageArea();
-  if (!area) throw managedTabsStateError("Managed-tab session storage is unavailable.");
-  try {
-    await area.set({
-      [MANAGED_TABS_SESSION_KEY]: {
-        version: 1,
-        tab_ids: normalizeManagedTabIds([...managedTabIds])
-      }
-    });
-  } catch (error) {
-    throw managedTabsStateError("BrowseWeave could not save its managed-tab ownership ledger.", error);
-  }
-}
-
-function notifyManagedTabState(): void {
-  void extensionBrowser.runtime.sendMessage({
-    kind: "bridge:managed-tabs",
-    managed_tab_count: managedTabIds.size,
-    managed_tab_limit: MAX_MANAGED_TABS
-  }).catch(() => undefined);
-}
-
-async function reconcileManagedTabsUnlocked(): Promise<void> {
-  let changed = false;
-  for (const id of [...managedTabIds]) {
-    try {
-      await extensionBrowser.tabs.get(id);
-    } catch {
-      managedTabIds.delete(id);
-      changed = true;
-    }
-  }
-  if (changed) {
-    await persistManagedTabsUnlocked();
-    notifyManagedTabState();
-  }
-}
-
-async function managedTabsSummary(): Promise<{ managed_tab_count: number; managed_tab_limit: number }> {
-  return withManagedTabsLock(async () => {
-    await ensureManagedTabsLoadedUnlocked();
-    await reconcileManagedTabsUnlocked();
-    return { managed_tab_count: managedTabIds.size, managed_tab_limit: MAX_MANAGED_TABS };
-  });
-}
-
-async function untrackManagedTab(id: number): Promise<void> {
-  await withManagedTabsLock(async () => {
-    await ensureManagedTabsLoadedUnlocked();
-    const remaining = managedTabsAfterClose([...managedTabIds], id);
-    if (remaining.length === managedTabIds.size) return;
-    managedTabIds.clear();
-    for (const tabIdValue of remaining) managedTabIds.add(tabIdValue);
-    await persistManagedTabsUnlocked();
-    notifyManagedTabState();
-  });
-}
-
-async function isManagedTab(id: number): Promise<boolean> {
-  return withManagedTabsLock(async () => {
-    await ensureManagedTabsLoadedUnlocked();
-    await reconcileManagedTabsUnlocked();
-    return isManagedTabOwned([...managedTabIds], id);
-  });
-}
-
-async function createManagedTab(
-  url: string,
-  active: boolean,
-  beforeCreate: () => Promise<void>
-): Promise<browser.tabs.Tab> {
-  return withManagedTabsLock(async () => {
-    await ensureManagedTabsLoadedUnlocked();
-    await reconcileManagedTabsUnlocked();
-    if (!canCreateManagedTab([...managedTabIds])) {
-      throw new BridgeError(
-        "managed_tab_limit",
-        `This browser profile already has ${MAX_MANAGED_TABS} open tabs created by BrowseWeave. Close one or run browser_cleanup_tabs before opening another.`,
-        undefined,
-        { managed_tab_count: managedTabIds.size, managed_tab_limit: MAX_MANAGED_TABS }
-      );
-    }
-    await beforeCreate();
-    const created = await extensionBrowser.tabs.create({ url, active });
-    if (typeof created.id !== "number" || !Number.isSafeInteger(created.id) || created.id <= 0) {
-      throw new BridgeError("tab_not_found", "The new browser tab did not receive a valid ID and could not be managed safely.");
-    }
-    managedTabIds.add(created.id);
-    try {
-      await persistManagedTabsUnlocked();
-    } catch (storageError) {
-      let rolledBack = false;
-      try {
-        await extensionBrowser.tabs.remove(created.id);
-        rolledBack = true;
-      } catch {
-        // Keep the ID in memory when even rollback fails; this worker will still enforce the cap.
-      }
-      if (rolledBack) managedTabIds.delete(created.id);
-      notifyManagedTabState();
-      throw storageError;
-    }
-    notifyManagedTabState();
-    return created;
-  });
-}
-
-async function cleanupManagedTabs(requested: unknown): Promise<Record<string, unknown>> {
-  return withManagedTabsLock(async () => {
-    await ensureManagedTabsLoadedUnlocked();
-    await reconcileManagedTabsUnlocked();
-    if (requested !== undefined) {
-      const normalized = normalizeManagedTabIds(requested);
-      if (!Array.isArray(requested) || requested.length > MAX_MANAGED_TABS || requested.length !== normalized.length) {
-        throw new BridgeError("invalid_tab_ids", `tab_ids must contain at most ${MAX_MANAGED_TABS} unique positive integer tab IDs.`);
-      }
-    }
-    const selected = selectManagedTabsForCleanup([...managedTabIds], requested);
-    const closed: number[] = [];
-    for (const id of selected) {
-      try {
-        await extensionBrowser.tabs.remove(id);
-        managedTabIds.delete(id);
-        closed.push(id);
-      } catch {
-        try {
-          await extensionBrowser.tabs.get(id);
-        } catch {
-          managedTabIds.delete(id);
-        }
-      }
-    }
-    await persistManagedTabsUnlocked();
-    notifyManagedTabState();
-    const remaining = normalizeManagedTabIds([...managedTabIds]);
-    return {
-      closed_tab_ids: closed,
-      remaining_tab_ids: remaining,
-      managed_tab_count: remaining.length
-    };
-  });
 }
 
 function approvalGrantStorageError(message: string, cause?: unknown): BridgeError {
@@ -782,284 +523,6 @@ async function consumeLocalApprovalGrant(
   });
 }
 
-function credentialStateError(code: string, message: string, cause?: unknown): BridgeError {
-  return new BridgeError(
-    code,
-    message,
-    undefined,
-    cause === undefined ? undefined : { cause: cause instanceof Error ? cause.message : String(cause) }
-  );
-}
-
-function randomCredentialId(prefix: "credential" | "remote-credential"): string {
-  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
-  return `${prefix}-${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-}
-
-async function withLocalCredentialHandoffsLock<T>(operation: () => Promise<T>): Promise<T> {
-  const previous = localCredentialHandoffsLock;
-  let release: (() => void) | undefined;
-  localCredentialHandoffsLock = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous.catch(() => undefined);
-  try {
-    return await operation();
-  } finally {
-    release?.();
-  }
-}
-
-async function persistLocalCredentialHandoffsUnlocked(): Promise<void> {
-  const area = sessionStorageArea();
-  if (!area) throw credentialStateError("credential_handoff_storage_unavailable", "Trusted credential-handoff session storage is unavailable.");
-  try {
-    await area.set({
-      [LOCAL_CREDENTIAL_HANDOFFS_SESSION_KEY]: {
-        version: 1,
-        handoffs: localCredentialHandoffs.snapshot()
-      }
-    });
-  } catch (error) {
-    throw credentialStateError(
-      "credential_handoff_storage_unavailable",
-      "BrowseWeave could not persist the local credential handoff.",
-      error
-    );
-  }
-}
-
-async function ensureLocalCredentialHandoffsLoadedUnlocked(): Promise<void> {
-  if (localCredentialHandoffsLoaded) return;
-  const area = sessionStorageArea();
-  if (!area) throw credentialStateError("credential_handoff_storage_unavailable", "Trusted credential-handoff session storage is unavailable.");
-  let stored: Record<string, unknown>;
-  try {
-    stored = await area.get(LOCAL_CREDENTIAL_HANDOFFS_SESSION_KEY);
-  } catch (error) {
-    throw credentialStateError("credential_handoff_storage_unavailable", "BrowseWeave could not read local credential handoffs.", error);
-  }
-  const value = stored[LOCAL_CREDENTIAL_HANDOFFS_SESSION_KEY];
-  if (value === undefined) {
-    localCredentialHandoffsLoaded = true;
-    return;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw credentialStateError("credential_handoff_state_invalid", "The local credential-handoff ledger failed integrity checks.");
-  }
-  const record = value as Record<string, unknown>;
-  const rawHandoffs = record.handoffs;
-  if (
-    record.version !== 1 || !Array.isArray(rawHandoffs) || rawHandoffs.length > MAX_CREDENTIAL_HANDOFFS ||
-    rawHandoffs.some((handoff) => !isLocalCredentialHandoff(handoff))
-  ) {
-    throw credentialStateError("credential_handoff_state_invalid", "The local credential-handoff ledger failed integrity checks.");
-  }
-  try {
-    localCredentialHandoffs = new LocalCredentialHandoffLedger(rawHandoffs as LocalCredentialHandoff[]);
-  } catch (error) {
-    throw credentialStateError("credential_handoff_state_invalid", "The local credential-handoff ledger failed integrity checks.", error);
-  }
-  localCredentialHandoffsLoaded = true;
-  if (localCredentialHandoffs.prune()) await persistLocalCredentialHandoffsUnlocked();
-}
-
-function notifyCredentialState(): void {
-  void extensionBrowser.runtime.sendMessage({ kind: "bridge:credentials" }).catch(() => undefined);
-}
-
-async function storeLocalCredentialHandoff(handoff: LocalCredentialHandoff): Promise<void> {
-  await withLocalCredentialHandoffsLock(async () => {
-    await ensureLocalCredentialHandoffsLoadedUnlocked();
-    localCredentialHandoffs.revokeTab(handoff.tab_id);
-    localCredentialHandoffs.add(handoff);
-    await persistLocalCredentialHandoffsUnlocked();
-  });
-  notifyCredentialState();
-}
-
-async function listLocalCredentialHandoffs(): Promise<LocalCredentialHandoff[]> {
-  return withLocalCredentialHandoffsLock(async () => {
-    await ensureLocalCredentialHandoffsLoadedUnlocked();
-    if (localCredentialHandoffs.prune()) await persistLocalCredentialHandoffsUnlocked();
-    return localCredentialHandoffs.snapshot();
-  });
-}
-
-async function consumeLocalCredentialHandoff(handoffId: string): Promise<LocalCredentialHandoff> {
-  return withLocalCredentialHandoffsLock(async () => {
-    await ensureLocalCredentialHandoffsLoadedUnlocked();
-    const handoff = localCredentialHandoffs.consume(handoffId);
-    if (!handoff) throw new BridgeError("credential_handoff_missing", "This local credential handoff is missing, expired, or already used.");
-    await persistLocalCredentialHandoffsUnlocked();
-    notifyCredentialState();
-    return handoff;
-  });
-}
-
-async function revokeLocalCredentialHandoff(handoffId: string): Promise<void> {
-  await withLocalCredentialHandoffsLock(async () => {
-    await ensureLocalCredentialHandoffsLoadedUnlocked();
-    if (!localCredentialHandoffs.revoke(handoffId)) return;
-    await persistLocalCredentialHandoffsUnlocked();
-  });
-  notifyCredentialState();
-}
-
-async function revokeCredentialHandoffsForTab(removedTabId: number): Promise<void> {
-  await withLocalCredentialHandoffsLock(async () => {
-    await ensureLocalCredentialHandoffsLoadedUnlocked();
-    if (localCredentialHandoffs.revokeTab(removedTabId) === 0) return;
-    await persistLocalCredentialHandoffsUnlocked();
-  });
-  notifyCredentialState();
-}
-
-async function withRemoteCredentialPermissionsLock<T>(operation: () => Promise<T>): Promise<T> {
-  const previous = remoteCredentialPermissionsLock;
-  let release: (() => void) | undefined;
-  remoteCredentialPermissionsLock = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous.catch(() => undefined);
-  try {
-    return await operation();
-  } finally {
-    release?.();
-  }
-}
-
-async function persistRemoteCredentialPermissionsUnlocked(): Promise<void> {
-  try {
-    await extensionBrowser.storage.local.set({
-      [REMOTE_CREDENTIAL_PERMISSIONS_STORAGE_KEY]: {
-        version: 1,
-        permissions: remoteCredentialPermissions.snapshot()
-      }
-    });
-  } catch (error) {
-    throw credentialStateError(
-      "remote_credential_permission_storage_unavailable",
-      "BrowseWeave could not persist the one-use remote credential permission.",
-      error
-    );
-  }
-}
-
-async function ensureRemoteCredentialPermissionsLoadedUnlocked(): Promise<void> {
-  if (remoteCredentialPermissionsLoaded) return;
-  let stored: Record<string, unknown>;
-  try {
-    stored = await extensionBrowser.storage.local.get(REMOTE_CREDENTIAL_PERMISSIONS_STORAGE_KEY);
-  } catch (error) {
-    throw credentialStateError(
-      "remote_credential_permission_storage_unavailable",
-      "BrowseWeave could not read remote credential permissions.",
-      error
-    );
-  }
-  const value = stored[REMOTE_CREDENTIAL_PERMISSIONS_STORAGE_KEY];
-  if (value === undefined) {
-    remoteCredentialPermissionsLoaded = true;
-    return;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw credentialStateError("remote_credential_permission_state_invalid", "The remote credential-permission ledger failed integrity checks.");
-  }
-  const record = value as Record<string, unknown>;
-  const rawPermissions = record.permissions;
-  if (
-    record.version !== 1 || !Array.isArray(rawPermissions) || rawPermissions.length > MAX_REMOTE_CREDENTIAL_PERMISSIONS ||
-    rawPermissions.some((permission) => !isRemoteCredentialPermission(permission))
-  ) {
-    throw credentialStateError("remote_credential_permission_state_invalid", "The remote credential-permission ledger failed integrity checks.");
-  }
-  try {
-    remoteCredentialPermissions = new RemoteCredentialPermissionLedger(rawPermissions as RemoteCredentialPermission[]);
-  } catch (error) {
-    throw credentialStateError("remote_credential_permission_state_invalid", "The remote credential-permission ledger failed integrity checks.", error);
-  }
-  remoteCredentialPermissionsLoaded = true;
-  if (remoteCredentialPermissions.prune()) await persistRemoteCredentialPermissionsUnlocked();
-}
-
-async function listRemoteCredentialPermissions(): Promise<RemoteCredentialPermission[]> {
-  return withRemoteCredentialPermissionsLock(async () => {
-    await ensureRemoteCredentialPermissionsLoadedUnlocked();
-    if (remoteCredentialPermissions.prune()) await persistRemoteCredentialPermissionsUnlocked();
-    return remoteCredentialPermissions.snapshot();
-  });
-}
-
-async function createRemoteCredentialPermission(
-  expectedOrigin: string,
-  expectedTabId: number,
-  durationMs: number
-): Promise<RemoteCredentialPermission> {
-  const exactOrigin = normalizeHttpsOrigin(expectedOrigin);
-  if (!Number.isSafeInteger(durationMs) || durationMs < 60_000 || durationMs > MAX_REMOTE_CREDENTIAL_PERMISSION_MS) {
-    throw new Error("Remote credential permission duration must be between 1 minute and 24 hours.");
-  }
-  const createdAt = Date.now();
-  const permission: RemoteCredentialPermission = {
-    permission_id: randomCredentialId("remote-credential"),
-    origin: exactOrigin,
-    created_at: new Date(createdAt).toISOString(),
-    expires_at: new Date(createdAt + durationMs).toISOString(),
-    one_use: true
-  };
-  await withRemoteCredentialPermissionsLock(async () => {
-    await ensureRemoteCredentialPermissionsLoadedUnlocked();
-    const currentTab = await activeTab();
-    if (!credentialGrantTargetMatches({
-      expectedOrigin: exactOrigin,
-      expectedTabId,
-      currentUrl: currentTab.url,
-      currentTabId: currentTab.id
-    })) {
-      throw new BridgeError(
-        "remote_credential_target_changed",
-        "The active tab or HTTPS origin changed after the permission prompt. Review the current site and confirm again."
-      );
-    }
-    const previousPermissions = remoteCredentialPermissions.snapshot();
-    remoteCredentialPermissions.add(permission, createdAt);
-    try {
-      await persistRemoteCredentialPermissionsUnlocked();
-    } catch (error) {
-      remoteCredentialPermissions = new RemoteCredentialPermissionLedger(previousPermissions);
-      throw error;
-    }
-  });
-  notifyCredentialState();
-  return permission;
-}
-
-async function revokeRemoteCredentialPermission(permissionId: string): Promise<void> {
-  await withRemoteCredentialPermissionsLock(async () => {
-    await ensureRemoteCredentialPermissionsLoadedUnlocked();
-    if (!remoteCredentialPermissions.revoke(permissionId)) return;
-    await persistRemoteCredentialPermissionsUnlocked();
-  });
-  notifyCredentialState();
-}
-
-async function consumeRemoteCredentialPermission(origin: string): Promise<RemoteCredentialPermission> {
-  return withRemoteCredentialPermissionsLock(async () => {
-    await ensureRemoteCredentialPermissionsLoadedUnlocked();
-    const permission = remoteCredentialPermissions.consumeOrigin(origin);
-    if (!permission) {
-      throw new BridgeError(
-        "remote_credential_permission_required",
-        `Remote credential filling is disabled for ${origin}. The user must grant one-use access from the BrowseWeave popup on that exact HTTPS origin.`
-      );
-    }
-    await persistRemoteCredentialPermissionsUnlocked();
-    notifyCredentialState();
-    return permission;
-  });
-}
-
 interface CredentialBindingReply {
   origin: string;
   document_epoch: string;
@@ -1111,178 +574,6 @@ function parseCredentialBindingReply(
   };
 }
 
-function randomInstallationId(): string {
-  if (typeof globalThis.crypto.randomUUID === "function") return globalThis.crypto.randomUUID().toLowerCase();
-  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
-  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
-  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-async function installationId(): Promise<string> {
-  installationIdPromise ??= (async () => {
-    const stored = await extensionBrowser.storage.local.get(INSTALLATION_ID_STORAGE_KEY);
-    const existing = stored[INSTALLATION_ID_STORAGE_KEY];
-    if (isInstallationId(existing)) return existing;
-    const created = randomInstallationId();
-    if (!isInstallationId(created)) throw new Error("BrowseWeave could not create a valid installation ID.");
-    await extensionBrowser.storage.local.set({ [INSTALLATION_ID_STORAGE_KEY]: created });
-    return created;
-  })();
-  return installationIdPromise;
-}
-
-function openSecurityDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = globalThis.indexedDB.open(SECURITY_DATABASE_NAME, SECURITY_DATABASE_VERSION);
-    request.onupgradeneeded = () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(SECURITY_STORE_NAME)) database.createObjectStore(SECURITY_STORE_NAME);
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("The BrowseWeave security database could not be opened."));
-    request.onblocked = () => reject(new Error("The BrowseWeave security database upgrade was blocked."));
-  });
-}
-
-function idbRequest<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("A BrowseWeave security database operation failed."));
-  });
-}
-
-function transactionCompleted(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error ?? new Error("The BrowseWeave security database transaction failed."));
-    transaction.onabort = () => reject(transaction.error ?? new Error("The BrowseWeave security database transaction was aborted."));
-  });
-}
-
-function validPrivateSigningKey(value: unknown): value is CryptoKey {
-  if (!(value instanceof CryptoKey)) return false;
-  const algorithm = value.algorithm as EcKeyAlgorithm;
-  return value.type === "private" && value.extractable === false && value.usages.length === 1 &&
-    value.usages[0] === "sign" && algorithm.name === "ECDSA" && algorithm.namedCurve === "P-256";
-}
-
-async function deviceSigningKey(): Promise<{ privateKey: CryptoKey; publicKey: P256PublicJwk }> {
-  deviceKeyPromise ??= (async () => {
-    const database = await openSecurityDatabase();
-    try {
-      const readTransaction = database.transaction(SECURITY_STORE_NAME, "readonly");
-      const existing = await idbRequest(readTransaction.objectStore(SECURITY_STORE_NAME).get(SECURITY_KEY_ID));
-      await transactionCompleted(readTransaction);
-      if (existing !== undefined) {
-        if (!existing || typeof existing !== "object") throw new Error("The stored BrowseWeave signing key is invalid.");
-        const record = existing as Record<string, unknown>;
-        if (!validPrivateSigningKey(record.privateKey) || !isP256PublicJwk(record.publicKey)) {
-          throw new Error("The stored BrowseWeave signing key failed integrity checks. Remove and pair the extension again.");
-        }
-        return { privateKey: record.privateKey, publicKey: record.publicKey };
-      }
-
-      const generated = await globalThis.crypto.subtle.generateKey(
-        { name: "ECDSA", namedCurve: "P-256" },
-        false,
-        ["sign", "verify"]
-      ) as CryptoKeyPair;
-      if (!validPrivateSigningKey(generated.privateKey)) {
-        throw new Error("The browser did not create a non-extractable BrowseWeave signing key.");
-      }
-      const exported = await globalThis.crypto.subtle.exportKey("jwk", generated.publicKey);
-      const publicKey = {
-        kty: exported.kty,
-        crv: exported.crv,
-        x: exported.x,
-        y: exported.y,
-        ext: true,
-        key_ops: ["verify"]
-      };
-      if (!isP256PublicJwk(publicKey)) throw new Error("The browser produced an invalid BrowseWeave public key.");
-      const writeTransaction = database.transaction(SECURITY_STORE_NAME, "readwrite");
-      writeTransaction.objectStore(SECURITY_STORE_NAME).put(
-        { privateKey: generated.privateKey, publicKey },
-        SECURITY_KEY_ID
-      );
-      await transactionCompleted(writeTransaction);
-      return { privateKey: generated.privateKey, publicKey };
-    } finally {
-      database.close();
-    }
-  })();
-  return deviceKeyPromise;
-}
-
-function toBase64Url(value: ArrayBuffer): string {
-  const bytes = new Uint8Array(value);
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return globalThis.btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/gu, "");
-}
-
-async function signPayload(payload: string): Promise<string> {
-  const { privateKey } = await deviceSigningKey();
-  const signature = await globalThis.crypto.subtle.sign(
-    { name: "ECDSA", hash: "SHA-256" },
-    privateKey,
-    new TextEncoder().encode(payload)
-  );
-  return toBase64Url(signature);
-}
-
-async function browserIdentity(): Promise<BrowserIdentity> {
-  const manifest = extensionBrowser.runtime.getManifest();
-  const id = await installationId();
-  if (typeof extensionBrowser.runtime.getBrowserInfo === "function") {
-    const info = await extensionBrowser.runtime.getBrowserInfo();
-    return {
-      installation_id: id,
-      browser_family: "firefox",
-      browser_name: normalizeText(info.name || "Firefox-compatible browser", 80),
-      browser_version: normalizeText(info.version || "unknown", 80),
-      extension_version: APP_VERSION
-    };
-  }
-
-  const navigatorRecord = globalThis.navigator as Navigator & {
-    userAgentData?: { brands?: Array<{ brand: string; version: string }> };
-    brave?: { isBrave?: () => Promise<boolean> };
-  };
-  const userAgent = navigatorRecord.userAgent || "";
-  let browserName = "Chromium";
-  let browserVersion = "unknown";
-  const branded = selectChromiumBrand(navigatorRecord.userAgentData?.brands);
-  const edgeMatch = /Edg\/([\d.]+)/u.exec(userAgent);
-  const vivaldiMatch = /Vivaldi\/([\d.]+)/u.exec(userAgent);
-  const operaMatch = /OPR\/([\d.]+)/u.exec(userAgent);
-  if (edgeMatch?.[1]) {
-    browserName = "Microsoft Edge";
-    browserVersion = edgeMatch[1];
-  } else if (vivaldiMatch?.[1]) {
-    browserName = "Vivaldi";
-    browserVersion = vivaldiMatch[1];
-  } else if (operaMatch?.[1]) {
-    browserName = "Opera";
-    browserVersion = operaMatch[1];
-  } else if (navigatorRecord.brave?.isBrave && await navigatorRecord.brave.isBrave().catch(() => false)) {
-    browserName = "Brave";
-    browserVersion = /Chrome\/([\d.]+)/u.exec(userAgent)?.[1] ?? branded?.version ?? "unknown";
-  } else {
-    browserName = branded?.brand || "Chromium";
-    browserVersion = /Chrome\/([\d.]+)/u.exec(userAgent)?.[1] ?? branded?.version ?? "unknown";
-  }
-  return {
-    installation_id: id,
-    browser_family: "chromium",
-    browser_name: normalizeText(browserName, 80),
-    browser_version: normalizeText(browserVersion, 80),
-    extension_version: APP_VERSION
-  };
-}
-
 function publicState(): Record<string, unknown> {
   return {
     phase: state.phase,
@@ -1295,7 +586,7 @@ function publicState(): Record<string, unknown> {
     browser_id: browserId || null,
     identity: currentIdentity,
     pending_approvals: pendingApprovals.size,
-    managed_tab_count: managedTabIds.size,
+    managed_tab_count: managedTabCount(),
     managed_tab_limit: MAX_MANAGED_TABS,
     requires_human: humanInterventions.size > 0,
     human_interventions: [...humanInterventions.values()]
@@ -2307,34 +1598,6 @@ async function handleCommand(command: CommandMessage, currentSocket: WebSocket, 
   }
 }
 
-async function activeTab(): Promise<browser.tabs.Tab> {
-  const tabs = await extensionBrowser.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
-  if (!tab || typeof tab.id !== "number") throw new BridgeError("tab_not_found", "No active browser tab was found.");
-  return tab;
-}
-
-async function targetTab(payload: Record<string, unknown>): Promise<browser.tabs.Tab> {
-  if (typeof payload.tab_id === "number" && Number.isInteger(payload.tab_id)) {
-    try {
-      return await extensionBrowser.tabs.get(payload.tab_id);
-    } catch {
-      throw new BridgeError("tab_not_found", "The requested browser tab was not found.", undefined, { tab_id: payload.tab_id });
-    }
-  }
-  return activeTab();
-}
-
-function tabId(tab: browser.tabs.Tab): number {
-  if (typeof tab.id !== "number") throw new BridgeError("tab_not_found", "The browser tab has no ID.");
-  return tab.id;
-}
-
-function windowId(tab: browser.tabs.Tab): number {
-  if (typeof tab.windowId !== "number") throw new BridgeError("window_not_found", "The browser window for this tab was not found.");
-  return tab.windowId;
-}
-
 async function injectContentScript(tab: browser.tabs.Tab): Promise<void> {
   try {
     if (extensionBrowser.runtime.getManifest().manifest_version === 3 && extensionBrowser.scripting?.executeScript) {
@@ -3314,7 +2577,7 @@ async function executeCommand(
       window_id: created.windowId,
       active: created.active,
       url: redactUrl(created.url || url),
-      managed_tab_count: managedTabIds.size,
+      managed_tab_count: managedTabCount(),
       managed_tab_limit: MAX_MANAGED_TABS
     };
   }
@@ -3325,7 +2588,7 @@ async function uiStatus(): Promise<Record<string, unknown>> {
   const token = await storedToken();
   const identity = currentIdentity ?? await browserIdentity().catch(() => null);
   let managedSummary: { managed_tab_count: number; managed_tab_limit: number } = {
-    managed_tab_count: managedTabIds.size,
+    managed_tab_count: managedTabCount(),
     managed_tab_limit: MAX_MANAGED_TABS
   };
   let managedTabsError = "";
