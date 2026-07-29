@@ -6,6 +6,14 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Added `setup --all-browsers` and a source-checkout `scripts/setup-all.sh` wrapper to install locked dependencies, build once, then enroll every detected supported browser sequentially and configure detected MCP clients once.
+
+### Fixed
+
+- Stopped detecting unsupported Chromium installations as Google Chrome when the native-host and profile discovery paths only support the Google Chrome layout.
+
 ## [0.1.0-beta.2] - 2026-07-28
 
 Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons release is claimed.

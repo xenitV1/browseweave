@@ -47,6 +47,14 @@ Use the exact public beta version:
 npx browseweave@0.1.0-beta.2 setup --browser chrome --client codex
 ```
 
+When the user explicitly wants every installed supported browser and every
+detected supported MCP client from a verified source checkout, use the
+repository-owned sequential all-browser flow:
+
+```bash
+./scripts/setup-all.sh
+```
+
 Pin the user's requested targets when needed:
 
 ```bash
@@ -60,7 +68,7 @@ npx browseweave@0.1.0-beta.2 setup --browser chrome --client opencode --opencode
 - Repeat `--client` for any requested combination of `codex`, `claude-code`, `cursor`, and `opencode`; these are the only automatic client-configuration targets.
 - For OpenCode, treat the installed executable name as authoritative: `opencode` is V1 and `opencode2` is V2. If both or neither are available, ask which generation the user intends and pass exactly one of `--opencode-v1` or `--opencode-v2` together with `--client opencode`.
 - Never infer the OpenCode generation from `mcp.servers`: V1 can legally have a server literally named `servers`. Require BrowseWeave to leave a mixed, mismatched, or foreign configuration unchanged.
-- Ask which browser/client the user wants and pass explicit flags. Without `--browser`, setup prefers Chrome when both browsers exist; without `--client`, it attempts every supported client it detects.
+- Ask which browser/client the user wants and pass explicit flags. Use `--all-browsers` only when the user asks for every installed supported browser. Without either browser-selection flag, setup prefers Chrome when both browsers exist; without `--client`, it attempts every supported client it detects.
 - Do not run `npm login`. Do not replace setup with a global npm install.
 - Require setup to preserve unrelated client configuration and refuse foreign or ambiguous `browseweave` entries.
 - For another local stdio MCP client, run `npx browseweave@0.1.0-beta.2 mcp-config generic` only after setup, then adapt the command/args entry manually to that client's current official schema. Never claim automatic or verified support for that client.
@@ -71,6 +79,13 @@ In a verified source checkout, the contributor path is:
 npm ci --ignore-scripts
 npm run build
 node dist/src/cli.js setup --from-source --browser chrome --client codex
+```
+
+For the user-requested all-browser source bootstrap, the repository-owned wrapper
+installs locked dependencies and builds before entering the same guided flow:
+
+```bash
+./scripts/setup-all.sh
 ```
 
 Change only the browser/client flags requested by the user.
