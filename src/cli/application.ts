@@ -94,7 +94,7 @@ function usage(): string {
   return `BrowseWeave ${APP_VERSION}
 
 Usage:
-  npx browseweave@${APP_VERSION} setup [--browser chrome|zen] [--browser-path <absolute-path>] [--new-profile] [--client <name>] [--opencode-v1|--opencode-v2]
+  npx browseweave@${APP_VERSION} setup [--browser chrome|zen | --all-browsers] [--browser-path <absolute-path>] [--new-profile] [--client <name>] [--opencode-v1|--opencode-v2]
   npx browseweave@${APP_VERSION} doctor
   npx browseweave@${APP_VERSION} service-install
   npx browseweave@${APP_VERSION} service-uninstall
@@ -261,6 +261,7 @@ function fixedManagedSystemExecutable(command: string): string {
 interface SetupOptions {
   browser?: SetupBrowserTarget;
   browserPath?: string;
+  allDetectedBrowsers: boolean;
   newProfile: boolean;
   clients: Array<Exclude<SupportedMcpClient, "generic">>;
   opencodeVersion?: 1 | 2;
@@ -286,6 +287,7 @@ function parseSetupOptions(args: string[]): SetupOptions {
   let browserTarget: SetupBrowserTarget | undefined;
   let browserPath: string | undefined;
   let browserSeen = false;
+  let allDetectedBrowsers = false;
   let fromSource = false;
   let newProfile = false;
   let opencodeVersion: 1 | 2 | undefined;
@@ -299,6 +301,11 @@ function parseSetupOptions(args: string[]): SetupOptions {
       browserTarget = value;
       browserSeen = true;
       index += 1;
+      continue;
+    }
+    if (argument === "--all-browsers") {
+      if (allDetectedBrowsers) throw new Error("Choose --all-browsers only once.");
+      allDetectedBrowsers = true;
       continue;
     }
     if (argument === "--browser-path") {
@@ -342,12 +349,19 @@ function parseSetupOptions(args: string[]): SetupOptions {
   if (browserPath !== undefined && browserTarget === undefined) {
     throw new Error("Use --browser chrome or --browser zen together with --browser-path.");
   }
+  if (allDetectedBrowsers && browserTarget !== undefined) {
+    throw new Error("Choose either --all-browsers or one explicit --browser target.");
+  }
+  if (allDetectedBrowsers && browserPath !== undefined) {
+    throw new Error("--browser-path can be used only with one explicit --browser target.");
+  }
   if (opencodeVersion !== undefined && clients.length > 0 && !clients.includes("opencode")) {
     throw new Error("Use an OpenCode version flag only with --client opencode, or let setup auto-detect clients.");
   }
   return {
     ...(browserTarget ? { browser: browserTarget } : {}),
     ...(browserPath ? { browserPath } : {}),
+    allDetectedBrowsers,
     clients,
     ...(opencodeVersion ? { opencodeVersion } : {}),
     fromSource,
@@ -561,10 +575,11 @@ async function accessibleFile(candidate: string): Promise<boolean> {
   }
 }
 
-async function detectBrowserLauncher(
+async function detectBrowserLaunchers(
   requested?: SetupBrowserTarget,
-  customExecutable?: string
-): Promise<BrowserLauncher> {
+  customExecutable?: string,
+  allDetected = false
+): Promise<BrowserLauncher[]> {
   if (customExecutable !== undefined) {
     if (!requested) throw new Error("A custom browser path requires an explicit chrome or zen target.");
     const resolved = await realpath(customExecutable).catch(() => undefined);
@@ -573,20 +588,18 @@ async function detectBrowserLauncher(
     if (!info.isFile() || !(await accessibleFile(resolved))) {
       throw new Error("The custom browser path is not an executable regular file.");
     }
-    return {
+    return [{
       target: requested,
       label: requested === "chrome" ? "Google Chrome" : "Zen Browser",
       command: resolved,
       prefixArgs: []
-    };
+    }];
   }
   const candidates: BrowserLauncher[] = [];
   if (process.platform === "linux") {
     for (const executable of [
       "/usr/bin/google-chrome-stable",
-      "/usr/bin/google-chrome",
-      "/usr/bin/chromium",
-      "/usr/bin/chromium-browser"
+      "/usr/bin/google-chrome"
     ]) {
       if (await accessibleFile(executable)) {
         candidates.push({ target: "chrome", label: "Google Chrome", command: executable, prefixArgs: [] });
@@ -654,6 +667,13 @@ async function detectBrowserLauncher(
     }
   }
 
+  if (allDetected) {
+    if (candidates.length === 0) {
+      throw new Error("Google Chrome or Zen Browser was not found in a supported installation location.");
+    }
+    return candidates;
+  }
+
   const selected = requested
     ? candidates.find((candidate) => candidate.target === requested)
     : candidates.find((candidate) => candidate.target === "chrome") ?? candidates[0];
@@ -662,7 +682,7 @@ async function detectBrowserLauncher(
       ? `${requested === "chrome" ? "Google Chrome" : "Zen Browser"} was not found in a supported installation location.`
       : "Google Chrome or Zen Browser was not found in a supported installation location.");
   }
-  return selected;
+  return [selected];
 }
 
 async function launchDetached(command: string, args: string[]): Promise<void> {
@@ -1365,20 +1385,12 @@ async function waitForSetupBrowser(input: {
   throw new Error("The one-click browser connection expired. Run the setup command again; no secret was retained in the setup page.");
 }
 
-async function runSetup(options: SetupOptions, originalArgs: string[]): Promise<void> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error("Run setup yourself in a visible interactive terminal so browser consent cannot be hidden.");
-  }
-  assertManagedSetupEnvironment();
-  if (options.fromSource) await assertPrivateSourceSetup();
-  if (!options.fromSource && await handOffSetupToPersistentInstall(originalArgs)) return;
-
-  const setupClients = await detectedSetupClients(options);
-  const setupOpenCodeVersion = setupClients.includes("opencode")
-    ? await resolveInstalledOpenCodeVersion(options.opencodeVersion)
-    : undefined;
-
-  const launcher = await detectBrowserLauncher(options.browser, options.browserPath);
+async function setupBrowser(input: {
+  launcher: BrowserLauncher;
+  newProfile: boolean;
+  baseline: readonly SetupBrowserStatus[];
+}): Promise<SetupBrowserStatus> {
+  const { launcher } = input;
   const packagedExtensionPath = await resolveExtensionPath(launcher.target);
   const extensionTarget = launcher.target === "chrome" ? "chromium-mv3" : "firefox-mv2";
   const extensionPath = await prepareManagedExtension({
@@ -1395,11 +1407,9 @@ async function runSetup(options: SetupOptions, originalArgs: string[]): Promise<
   }
   const requestedFamily = launcher.target === "chrome" ? "chromium" : "firefox";
   process.stdout.write(`BrowseWeave setup selected ${launcher.label}.\n`);
-  await installService();
-  const baseline = await daemonBrowsersWithRetry();
-  const alreadyConnected = options.newProfile
+  const alreadyConnected = input.newProfile
     ? undefined
-    : baseline.find((browser) =>
+    : input.baseline.find((browser) =>
       browser.browser_family === requestedFamily && browser.extension_version === APP_VERSION
     );
   let selectedBrowser: SetupBrowserStatus | undefined = alreadyConnected;
@@ -1458,8 +1468,8 @@ async function runSetup(options: SetupOptions, originalArgs: string[]): Promise<
       const connected = await waitForSetupBrowser({
         setupId: page.setupId,
         family: requestedFamily,
-        forbiddenBrowserIds: options.newProfile
-          ? new Set(baseline.map((browser) => browser.browser_id))
+        forbiddenBrowserIds: input.newProfile
+          ? new Set(input.baseline.map((browser) => browser.browser_id))
           : new Set<string>(),
         expiresAt: page.expiresAt,
         interrupted: () => interrupted
@@ -1526,7 +1536,6 @@ async function runSetup(options: SetupOptions, originalArgs: string[]): Promise<
       );
     }
   }
-  await configureSetupClients(setupClients, setupOpenCodeVersion);
   const connected = await daemonBrowsersWithRetry(5_000);
   if (!selectedBrowser || !connected.some((browser) =>
     browser.browser_id === selectedBrowser.browser_id
@@ -1537,8 +1546,61 @@ async function runSetup(options: SetupOptions, originalArgs: string[]): Promise<
   )) {
     throw new Error(`${launcher.label} did not remain connected after setup.`);
   }
+  return selectedBrowser;
+}
+
+async function runSetup(options: SetupOptions, originalArgs: string[]): Promise<void> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("Run setup yourself in a visible interactive terminal so browser consent cannot be hidden.");
+  }
+  assertManagedSetupEnvironment();
+  if (options.fromSource) await assertPrivateSourceSetup();
+  if (!options.fromSource && await handOffSetupToPersistentInstall(originalArgs)) return;
+
+  const setupClients = await detectedSetupClients(options);
+  const setupOpenCodeVersion = setupClients.includes("opencode")
+    ? await resolveInstalledOpenCodeVersion(options.opencodeVersion)
+    : undefined;
+  const launchers = await detectBrowserLaunchers(
+    options.browser,
+    options.browserPath,
+    options.allDetectedBrowsers
+  );
+  if (launchers.length > 1) {
+    process.stdout.write(
+      `BrowseWeave detected ${launchers.map(({ label }) => label).join(" and ")}. ` +
+      "Each browser will ask for its own extension approval.\n"
+    );
+  }
+
+  await installService();
+  const baseline = await daemonBrowsersWithRetry();
+  const selectedBrowsers: SetupBrowserStatus[] = [];
+  for (let index = 0; index < launchers.length; index += 1) {
+    if (launchers.length > 1) {
+      process.stdout.write(`Browser ${index + 1}/${launchers.length}: ${launchers[index]!.label}.\n`);
+    }
+    selectedBrowsers.push(await setupBrowser({
+      launcher: launchers[index]!,
+      newProfile: options.newProfile,
+      baseline
+    }));
+  }
+
+  await configureSetupClients(setupClients, setupOpenCodeVersion);
+  const connected = await daemonBrowsersWithRetry(5_000);
+  for (const selectedBrowser of selectedBrowsers) {
+    if (!connected.some((browser) =>
+      browser.browser_id === selectedBrowser.browser_id
+      && browser.browser_family === selectedBrowser.browser_family
+      && browser.browser_name === selectedBrowser.browser_name
+      && browser.browser_version === selectedBrowser.browser_version
+      && browser.extension_version === APP_VERSION
+    )) throw new Error(`${selectedBrowser.browser_name} did not remain connected after MCP configuration.`);
+  }
   process.stdout.write(
-    "BrowseWeave setup is complete. Start a new AI-client session and call browser_status.\n"
+    `BrowseWeave setup is complete for ${launchers.map(({ label }) => label).join(" and ")}. ` +
+    "Start a new AI-client session and call browser_status.\n"
   );
 }
 

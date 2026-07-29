@@ -10,12 +10,14 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 - Optional local file attachment: `browser_attach_file` places a file into a page's file input without opening the operating-system file picker, which no extension can drive. It is off by default and reads only from directories listed in an owner-only `policy.json`. Hidden files and directories, key and credential material, unsupported types, oversized files, and BrowseWeave's own directories are never attachable, symlinks are resolved before the decision, and the open handle is re-verified so the path cannot be swapped mid-read. Attachment always requires human approval; the file's bytes form part of the approval identity, so a changed file cannot reuse a confirmation. In-session confirmation additionally requires typing the file's SHA-256 prefix. The absolute path never reaches the browser, the audit log stores a path hash rather than the path, and snapshots report `[ATTACHED:n]` instead of a filename.
 - Optional session-confirmed approval: for form submissions, message or publish actions, and off-site navigation, a human may confirm in the MCP client session by typing a daemon-generated four-word phrase, instead of approving in the extension popup. It is off by default and requires two independent opt-ins — an owner-only `policy.json` and a toggle in extension-owned Settings. Payments, deletion, passwords, one-time codes, account security, coordinate clicks, and both credential channels always keep the extension-signed decision. The confirmation phrase never enters a tool result, the audit log, extension UI, a page, or daemon output, and one wrong phrase discards the approval. This path rests on a weaker assumption than the default — that the MCP client relays human input honestly — which `SECURITY.md` now states explicitly.
+- Added `setup --all-browsers` and a source-checkout `scripts/setup-all.sh` wrapper to install locked dependencies, build once, then enroll every detected supported browser sequentially and configure detected MCP clients once.
 
 ### Fixed
 
 - Typed text now yields to the page between keystrokes, so debounced autocomplete, asynchronous framework state, and per-keystroke validators observe intermediate values instead of a single burst. Text beyond the paced ceiling keeps the previous immediate path.
 - Scrolling advances in bounded steps instead of one jump, so `IntersectionObserver`, infinite-scroll, and virtualised-list handlers run for the traversed region and later snapshots no longer miss lazily loaded content.
 - Clicks and hovers emit a short pointer movement path ending exactly on the target, so hover-driven menus that gate on movement open as expected.
+- Stopped detecting unsupported Chromium installations as Google Chrome when the native-host and profile discovery paths only support the Google Chrome layout.
 
 ### Changed
 
