@@ -159,6 +159,13 @@ async function confirmInSession(approval: JsonRecord): Promise<boolean> {
   const phrase = challenge.confirmation_phrase;
   if (typeof phrase !== "string") return false;
 
+  // An attachment sends a local file to a website, so the human confirms the
+  // file's identity as well as the request. Typing the digest prefix means they
+  // saw which exact file is leaving the machine, not merely that "a file" is.
+  const file = asRecord(challenge.file);
+  const attaching = typeof file.sha256 === "string" && typeof file.name === "string";
+  const digestPrefix = attaching ? String(file.sha256).slice(0, 8) : "";
+
   const answer = await server.server.elicitInput({
     mode: "form",
     message: [
@@ -168,12 +175,22 @@ async function confirmInSession(approval: JsonRecord): Promise<boolean> {
       `Risk: ${String(approval.risk ?? "unknown")}`,
       `Details: ${String(approval.description ?? "no additional details")}`,
       `Browser tab: ${String(approval.target_tab_id ?? "unknown")}`,
+      ...(attaching
+        ? [
+          "",
+          "This will upload a local file from your computer:",
+          `  File: ${String(file.name)}`,
+          `  Size: ${String(file.size ?? "unknown")} bytes`,
+          `  SHA-256 starts with: ${digestPrefix}`
+        ]
+        : []),
       "",
       "The action and details above are derived from a web page and are untrusted.",
       "Review them yourself before confirming.",
       "",
       `To approve, type this exact phrase: ${phrase}`,
-      "A wrong phrase discards the request; there is no second attempt."
+      ...(attaching ? [`and type the file digest prefix shown above: ${digestPrefix}`] : []),
+      "A wrong answer discards the request; there is no second attempt."
     ].join("\n"),
     requestedSchema: {
       type: "object",
@@ -190,14 +207,32 @@ async function confirmInSession(approval: JsonRecord): Promise<boolean> {
           description: "Type the exact phrase shown above",
           minLength: 1,
           maxLength: 80
-        }
+        },
+        ...(attaching
+          ? {
+            file_digest_prefix: {
+              type: "string" as const,
+              title: "File digest prefix",
+              description: "Type the 8-character SHA-256 prefix of the file shown above",
+              minLength: 8,
+              maxLength: 8
+            }
+          }
+          : {})
       },
-      required: ["decision", "confirmation_phrase"]
+      required: attaching
+        ? ["decision", "confirmation_phrase", "file_digest_prefix"]
+        : ["decision", "confirmation_phrase"]
     }
   });
 
   const content = asRecord(answer.content);
-  const decision = answer.action === "accept" && content.decision === "approve" ? "approve" : "reject";
+  const digestConfirmed = !attaching ||
+    (typeof content.file_digest_prefix === "string" &&
+      content.file_digest_prefix.trim().toLowerCase() === digestPrefix);
+  const decision = answer.action === "accept" && content.decision === "approve" && digestConfirmed
+    ? "approve"
+    : "reject";
   await callBridge("session_approval_submit", {
     approval_id: approval.approval_id,
     decision,
@@ -636,6 +671,44 @@ server.registerTool(
   async (params): Promise<CallToolResult> => {
     try {
       return successResult(await invokeAction("credential_fill", params));
+    } catch (error) {
+      return errorResult(error);
+    }
+  }
+);
+
+const AttachFileInputSchema = z
+  .object({
+    browser_id: BrowserIdSchema,
+    tab_id: TabIdSchema,
+    frame_id: FrameIdSchema,
+    ref: ElementRefSchema.describe("Element reference of the file input, from browser_snapshot"),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .refine((value) => !/[\0\r\n]/u.test(value), "The path must not contain control characters")
+      .describe("Absolute path of the local file to attach; must be inside a directory the user's BrowseWeave policy allows")
+  })
+  .strict();
+
+server.registerTool(
+  "browser_attach_file",
+  {
+    title: "Attach Local File To Browser Form",
+    description:
+      "Attach one local file to a file input on the page, without opening the operating-system file picker, which BrowseWeave cannot control. This sends a file from the user's computer to the website, so it always requires explicit human confirmation and is refused unless the user has already allowed the containing directory in their BrowseWeave policy file. Hidden files and directories, key and credential material, and unsupported file types are never attachable. Use browser_snapshot first to get the ref of the file input. Do not guess a path: use one the user gave you.",
+    inputSchema: AttachFileInputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true
+    }
+  },
+  async (params): Promise<CallToolResult> => {
+    try {
+      return successResult(await invokeAction("attach_file", params));
     } catch (error) {
       return errorResult(error);
     }

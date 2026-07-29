@@ -94,6 +94,16 @@ import {
   type StoredExtensionKey
 } from "./key-registry.js";
 import {
+  DISABLED_FILE_ATTACH_POLICY,
+  FileAttachError,
+  attachedFileFacts,
+  auditPathDigest,
+  loadFileAttachPolicy,
+  readAttachableFile,
+  type AttachableFile,
+  type FileAttachPolicy
+} from "./file-attach.js";
+import {
   DISABLED_SESSION_APPROVAL_POLICY,
   createSessionChallenge,
   loadSessionApprovalPolicy,
@@ -111,6 +121,8 @@ const MAX_UNAUTHENTICATED_CONNECTIONS = 8;
 const MAX_IPC_CONNECTIONS = 128;
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const SAFE_CLOSE_REASON = "policy violation";
+/** Base64 expansion of the largest attachable file, plus envelope headroom. */
+const ATTACH_FILE_COMMAND_CEILING_BYTES = 12 * 1024 * 1024;
 const IPC_ENVELOPE_OVERHEAD_BYTES = 16 * 1024;
 const MAX_IPC_HELLO_BYTES = 4 * 1024;
 const SETUP_SECRET_PATTERN = /^[a-f0-9]{64}$/u;
@@ -358,6 +370,7 @@ export class BrowseWeaveDaemon {
   readonly #pendingCommands = new Map<string, PendingCommand>();
   readonly #pendingApprovals = new Map<string, PendingApproval>();
   #sessionPolicy: SessionApprovalPolicy = DISABLED_SESSION_APPROVAL_POLICY;
+  #fileAttachPolicy: FileAttachPolicy = DISABLED_FILE_ATTACH_POLICY;
   #setupPairingSession: SetupPairingSession | undefined;
   #legacyPairingSession: LegacyPairingSession | undefined;
   #wsServer: WebSocketServer | undefined;
@@ -386,6 +399,7 @@ export class BrowseWeaveDaemon {
     // Read once at startup so a policy change is a deliberate restart rather
     // than something that can take effect mid-session.
     this.#sessionPolicy = await loadSessionApprovalPolicy(this.#config.configDir);
+    this.#fileAttachPolicy = await loadFileAttachPolicy(this.#config.configDir);
     this.#startedAt = Date.now();
     try {
       await this.#audit.start();
@@ -1403,6 +1417,10 @@ export class BrowseWeaveDaemon {
       this.#writeFailure(socket, request.id, session.message);
       return;
     }
+    if (request.method === "attach_file") {
+      void this.#handleAttachFile(socket, request.id, session, request.params);
+      return;
+    }
     const actionParams = jsonObjectWithout(request.params, new Set(["browser_id"]));
     const approvedGrant = this.#findApprovalForParams(
       session.browserId,
@@ -1714,7 +1732,13 @@ export class BrowseWeaveDaemon {
       };
     }
     const serialized = JSON.stringify(command);
-    if (Buffer.byteLength(serialized, "utf8") > this.#config.maxCommandPayloadBytes) {
+    // An attachment carries base64 file bytes, which legitimately exceed the
+    // limit meant for ordinary commands. The file's own size cap is enforced by
+    // the path policy before it ever reaches here.
+    const payloadCeiling = action === "attach_file"
+      ? Math.max(this.#config.maxCommandPayloadBytes, ATTACH_FILE_COMMAND_CEILING_BYTES)
+      : this.#config.maxCommandPayloadBytes;
+    if (Buffer.byteLength(serialized, "utf8") > payloadCeiling) {
       if (approvedGrantId !== undefined) {
         this.#cancelApprovedDelivery(session, approvedGrantId, action, "approved_delivery_too_large");
       }
@@ -2101,6 +2125,72 @@ export class BrowseWeaveDaemon {
   }
 
   /**
+   * Reads the requested local file under the owner's path policy and forwards
+   * it as ordinary command parameters.
+   *
+   * The file bytes are deliberately part of the approval's parameter identity.
+   * A retry re-reads the file, so a byte-identical file matches the existing
+   * grant while any change produces different parameters and therefore requires
+   * a fresh approval. That closes the window between confirming a file and
+   * uploading it without a separate digest check.
+   */
+  async #handleAttachFile(
+    socket: Socket,
+    requestId: string,
+    session: BrowserSession,
+    params: JsonObject
+  ): Promise<void> {
+    let file: AttachableFile;
+    try {
+      file = await readAttachableFile(params.path, this.#fileAttachPolicy, [
+        this.#config.configDir,
+        this.#config.stateDir,
+        this.#config.runtimeDir
+      ]);
+    } catch (error) {
+      const code = error instanceof FileAttachError ? error.code : "file_attach_failed";
+      this.#audit.record({ event: "command", action: "attach_file", outcome: "failed", code });
+      this.#writeFailure(
+        socket,
+        requestId,
+        error instanceof FileAttachError ? error.message : "The file could not be read."
+      );
+      return;
+    }
+
+    this.#audit.record({
+      event: "command",
+      action: "attach_file",
+      outcome: "file_accepted",
+      code: `sha256:${file.sha256.slice(0, 16)}:path:${auditPathDigest(file.resolvedPath)}`
+    });
+
+    const actionParams: JsonObject = {
+      ...jsonObjectWithout(params, new Set(["browser_id", "path"])),
+      file: {
+        name: file.name,
+        mime_type: file.mimeType,
+        sha256: file.sha256,
+        size: file.size,
+        base64: file.base64
+      }
+    };
+    const approvedGrant = this.#findApprovalForParams(session.browserId, "attach_file", actionParams, "approved");
+    this.#routeCommand(
+      socket,
+      requestId,
+      session,
+      "attach_file",
+      actionParams,
+      false,
+      undefined,
+      approvedGrant !== undefined,
+      approvedGrant?.approvalId,
+      approvedGrant?.approvalSource
+    );
+  }
+
+  /**
    * Issues the confirmation phrase to the MCP server over authenticated IPC.
    * The phrase is never written to a tool result or the audit log, so a page
    * cannot learn it and replay a confirmation the human never gave.
@@ -2128,7 +2218,8 @@ export class BrowseWeaveDaemon {
       target_tab_id: approval.targetTabId,
       target_frame_id: approval.targetFrameId,
       expires_at: approval.expiresAtIso,
-      confirmation_phrase: approval.sessionChallenge
+      confirmation_phrase: approval.sessionChallenge,
+      ...(attachedFileFacts(approval.params) ?? {})
     });
   }
 

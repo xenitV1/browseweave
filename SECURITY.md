@@ -71,6 +71,24 @@ For clicks and submissions, the displayed destination is the browser-verified **
 
 Risk detection is a defense layer, not a complete understanding of every site. Custom scripts, unlabeled controls, unfamiliar languages, deceptive labels, and site changes can evade a heuristic. The user and agent must still review the real target and use the least-powerful action that completes the task.
 
+## Attaching local files
+
+File attachment is the only capability that reads something outside a web page, so it is a genuinely new class of reach for BrowseWeave: without controls it would be a local-file exfiltration primitive, where an injected instruction could upload a private file to a hostile origin. It is **off by default**.
+
+Because attachment is session-approvable, the human confirming it may not be at the browser. The path policy — not an approval screen — is therefore the primary defence:
+
+- **Default deny.** With no `policy.json`, nothing is attachable. Enabling it requires listing absolute directories in an owner-only file that no MCP tool can write.
+- **Never attachable, even inside an allowed directory:** any path with a segment beginning with a dot, which covers `.ssh`, `.gnupg`, `.aws`, `.env`, and `.npmrc`; key and credential material such as `.pem`, `.key`, `.p12`, `id_rsa`, keychains, and wallet or seed files; unsupported file types; and BrowseWeave's own configuration, state, and runtime directories.
+- **Symlinks resolved before deciding,** with both the written path and the resolved path checked, so a link cannot reach outside the allowlist or hide a denied name behind an innocent one.
+- **Owner and handle checks.** Only regular files owned by the current user are read, opened with `O_NOFOLLOW`, and the device and inode are re-verified through the open handle so the path cannot be swapped between the check and the read.
+- **Size and type caps** from the policy, bounded by the transport ceiling.
+
+Approval is unconditional — attachment is never left to the risk heuristics, in the same way a semantic-free coordinate click is not. The file's bytes are part of the approval's parameter identity, so a retry with a changed file cannot reuse the approval the human gave; it produces a fresh approval instead. When confirmed in-session, the human must type both the confirmation phrase and the file's SHA-256 prefix, so the answer attests to the exact file, not merely to "a file".
+
+The absolute path never reaches the browser; only the basename and bytes do. The audit log records the digest, size, type, and a hash of the path, never the path or the contents. Snapshots report an attached file as `[ATTACHED:n]` rather than its name.
+
+Clicking a file input remains refused. The operating-system picker cannot be driven by any extension, and opening it would block the tab with a modal BrowseWeave cannot dismiss.
+
 ## Credential channels
 
 Ordinary type, form-fill, and character-key actions reject password, one-time-code, and payment-card targets. The recommended five-minute local handoff accepts username/password only in the trusted extension popup and binds them to one live HTTPS origin, document, frame, form, and field set. Values do not enter MCP or the daemon.

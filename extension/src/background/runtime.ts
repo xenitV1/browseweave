@@ -207,7 +207,7 @@ const COMMAND_ACTIONS = new Set([
   ...BROWSER_ACTIONS
 ]);
 
-const CONTENT_ACTIONS = new Set(["snapshot", "click", "click_at", "type", "fill_form", "hover", "press", "scroll", "wait"]);
+const CONTENT_ACTIONS = new Set(["snapshot", "click", "click_at", "type", "fill_form", "hover", "press", "scroll", "wait", "attach_file"]);
 const MAX_INCOMING_MESSAGE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_SNAPSHOT_CHARS = 12_000;
 const MAX_SNAPSHOT_CACHE_ENTRIES = 6;
@@ -254,16 +254,16 @@ const mutationStressUntil = new Map<number, number>();
 const consumedSessionApprovals = new Map<string, number>();
 
 const MUTATING_ACTIONS = new Set<BrowserAction>([
-  "hover", "click_at", "click", "type", "fill_form", "credential_fill", "press", "scroll",
+  "hover", "click_at", "click", "type", "fill_form", "credential_fill", "attach_file", "press", "scroll",
   "navigate", "back", "forward", "reload", "close_tab", "cleanup_tabs", "activate_tab", "new_tab"
 ]);
 const DOM_GUARDED_ACTIONS = new Set<BrowserAction>([
-  "hover", "click_at", "click", "type", "fill_form", "credential_fill", "press", "scroll",
+  "hover", "click_at", "click", "type", "fill_form", "credential_fill", "attach_file", "press", "scroll",
   "navigate", "back", "forward", "reload"
 ]);
 const PAGE_GUARDED_READ_ACTIONS = new Set<BrowserAction>(["snapshot", "screenshot", "credential_handoff_prepare"]);
 const APPROVAL_CONTEXT_ACTIONS = new Set<BrowserAction>([
-  "click_at", "click", "type", "fill_form", "press", "navigate"
+  "click_at", "click", "type", "fill_form", "attach_file", "press", "navigate"
 ]);
 
 let socket: WebSocket | null = null;

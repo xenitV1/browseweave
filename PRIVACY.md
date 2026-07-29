@@ -15,7 +15,8 @@ the bounded audit log described below:
 - the filtered text, links, controls, and metadata visible in permitted web pages;
 - a screenshot of the visible tab when explicitly requested;
 - click, keyboard, scroll, hover, and navigation commands;
-- values the user asks the AI client to enter into a page.
+- values the user asks the AI client to enter into a page;
+- the contents of a local file the user explicitly asked to attach, when file attachment is enabled.
 
 Because it works on general web pages, this data can include identity, communication, search, location, health, financial, or other sensitive information. Browser-store declarations list broad categories for this reason; they do not mean BrowseWeave collects those categories for its own business use.
 
@@ -24,6 +25,10 @@ Because it works on general web pages, this data can include identity, communica
 The extension connects only to `ws://127.0.0.1:32110` on the same computer. During a user-started connection, the browser may also open the locally registered `io.browseweave.setup` native helper over browser-owned standard input/output. The helper exchanges only bounded setup metadata with the local daemon; it does not receive page text, screenshots, form values, or browsing history. Neither path sends page data directly to a BrowseWeave server.
 
 Browser content returned by a tool becomes part of the MCP result. The selected AI client and its model provider may then process that result under their own privacy terms. Reading a private page or requesting its screenshot therefore does not guarantee that the content stays only on the computer.
+
+## Local files
+
+File attachment is off by default. When the owner enables it, BrowseWeave reads only files inside the directories listed in `policy.json`, and never a hidden file or directory, key or credential material, or an unsupported file type. A file that is attached is uploaded to the website the user directed, under that site's terms; BrowseWeave does not send it anywhere else. The audit log records the file's SHA-256, size, type, and a hash of its path — never the path or the contents. The extension receives the file's basename and bytes for the single upload and does not persist them.
 
 ## Local storage
 

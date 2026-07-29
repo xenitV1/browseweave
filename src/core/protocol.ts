@@ -23,6 +23,7 @@ export const BROWSER_ACTIONS = [
   "fill_form",
   "credential_handoff_prepare",
   "credential_fill",
+  "attach_file",
   "press",
   "scroll",
   "navigate",
@@ -55,7 +56,7 @@ export type ApprovalSource = "extension_signed" | "session";
  * semantic-free coordinate click — always requires the extension-signed
  * decision. Both the daemon and the extension read this one list.
  */
-export const SESSION_APPROVABLE_RISKS = ["form_submit", "message", "external_navigation"] as const;
+export const SESSION_APPROVABLE_RISKS = ["form_submit", "message", "external_navigation", "file_attach"] as const;
 
 export type SessionApprovableRisk = (typeof SESSION_APPROVABLE_RISKS)[number];
 

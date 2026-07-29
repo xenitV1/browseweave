@@ -6,9 +6,9 @@ import {
   DISABLED_SESSION_APPROVAL_POLICY,
   createSessionChallenge,
   loadSessionApprovalPolicy,
-  sessionChallengeMatches,
-  sessionPolicyPath
+  sessionChallengeMatches
 } from "../src/daemon/session-approval.js";
+import { policyPath } from "../src/daemon/policy.js";
 import {
   SESSION_APPROVABLE_RISKS,
   SESSION_CHALLENGE_PATTERN,
@@ -22,7 +22,7 @@ async function policyDirectory(contents?: string, mode = 0o600): Promise<string>
   const directory = await mkdtemp(path.join(tmpdir(), "browseweave-policy-"));
   directories.push(directory);
   if (contents !== undefined) {
-    const file = sessionPolicyPath(directory);
+    const file = policyPath(directory);
     await writeFile(file, contents, { mode });
     await chmod(file, mode);
   }
@@ -142,7 +142,7 @@ describe("session approval policy file", () => {
     directories.push(directory);
     const real = path.join(directory, "elsewhere.json");
     await writeFile(real, JSON.stringify({ session_approval: { enabled: true } }), { mode: 0o600 });
-    await symlink(real, sessionPolicyPath(directory));
+    await symlink(real, policyPath(directory));
     await expect(loadSessionApprovalPolicy(directory)).rejects.toThrow(/not a safe regular file/);
   });
 });

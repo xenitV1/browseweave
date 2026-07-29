@@ -7,8 +7,7 @@
  * result, the audit log, extension UI, a page DOM or URL, or daemon output.
  */
 import { randomInt, timingSafeEqual } from "node:crypto";
-import { constants as fsConstants, lstat, open } from "node:fs/promises";
-import path from "node:path";
+import { policySection, readPolicyDocument } from "./policy.js";
 import {
   SESSION_APPROVABLE_RISKS,
   SESSION_CHALLENGE_PATTERN,
@@ -16,9 +15,7 @@ import {
   normalizeSessionChallenge
 } from "../core/protocol.js";
 
-export const SESSION_POLICY_FILE_NAME = "policy.json" as const;
 export const SESSION_CHALLENGE_WORDS = 4;
-const MAX_POLICY_BYTES = 8 * 1024;
 
 /**
  * Short, unambiguous, keyboard-simple words. The list is fixed so a challenge
@@ -59,10 +56,6 @@ export const DISABLED_SESSION_APPROVAL_POLICY: SessionApprovalPolicy = {
   risks: new Set<string>()
 };
 
-export function sessionPolicyPath(configDir: string): string {
-  return path.join(configDir, SESSION_POLICY_FILE_NAME);
-}
-
 /** Unbiased selection; `randomInt` rejects modulo-skewed draws internally. */
 export function createSessionChallenge(words = SESSION_CHALLENGE_WORDS): string {
   const chosen: string[] = [];
@@ -85,22 +78,8 @@ export function sessionChallengeMatches(expected: string, candidate: unknown): b
   return timingSafeEqual(expectedBytes, candidateBytes);
 }
 
-function parsePolicy(contents: string): SessionApprovalPolicy {
-  let value: unknown;
-  try {
-    value = JSON.parse(contents) as unknown;
-  } catch {
-    throw new Error("The BrowseWeave policy file is not valid JSON.");
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("The BrowseWeave policy file must contain a JSON object.");
-  }
-  const record = (value as Record<string, unknown>).session_approval;
-  if (record === undefined) return DISABLED_SESSION_APPROVAL_POLICY;
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    throw new Error("session_approval must be a JSON object.");
-  }
-  const section = record as Record<string, unknown>;
+function parsePolicy(section: Record<string, unknown> | undefined): SessionApprovalPolicy {
+  if (section === undefined) return DISABLED_SESSION_APPROVAL_POLICY;
   if (typeof section.enabled !== "boolean") {
     throw new Error("session_approval.enabled must be true or false.");
   }
@@ -119,36 +98,7 @@ function parsePolicy(contents: string): SessionApprovalPolicy {
   return { enabled: true, risks: new Set(rawRisks as string[]) };
 }
 
-/**
- * Reads the owner-only policy file. A missing file leaves session approval off.
- * A present but unsafe or invalid file fails closed rather than falling back to
- * a default, so a damaged policy can never silently widen authority.
- */
+/** A missing policy file leaves session approval off. */
 export async function loadSessionApprovalPolicy(configDir: string): Promise<SessionApprovalPolicy> {
-  const policyPath = sessionPolicyPath(configDir);
-  let info;
-  try {
-    info = await lstat(policyPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return DISABLED_SESSION_APPROVAL_POLICY;
-    throw error;
-  }
-  if (!info.isFile() || info.isSymbolicLink()) {
-    throw new Error(`The BrowseWeave policy file is not a safe regular file: ${policyPath}`);
-  }
-  if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
-    throw new Error(`The BrowseWeave policy file is not owned by the current user: ${policyPath}`);
-  }
-  if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
-    throw new Error(`The BrowseWeave policy file permissions are unsafe. Restrict it to its owner: ${policyPath}`);
-  }
-  if (info.size > MAX_POLICY_BYTES) {
-    throw new Error(`The BrowseWeave policy file exceeds ${MAX_POLICY_BYTES} bytes: ${policyPath}`);
-  }
-  const handle = await open(policyPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-  try {
-    return parsePolicy(await handle.readFile("utf8"));
-  } finally {
-    await handle.close();
-  }
+  return parsePolicy(policySection(await readPolicyDocument(configDir), "session_approval"));
 }

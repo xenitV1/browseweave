@@ -77,7 +77,8 @@ export type RiskCategory =
   | "2fa"
   | "security"
   | "external_navigation"
-  | "visual_click";
+  | "visual_click"
+  | "file_attach";
 
 export interface FieldDescriptor {
   tag?: string;

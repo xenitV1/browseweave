@@ -1881,6 +1881,121 @@ describe("BrowseWeave daemon integration", () => {
     return startHarness({}, root);
   }
 
+  it("reads an allowed local file, pauses it for approval, and binds the approval to the exact bytes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "browseweave-daemon-"));
+    const documents = path.join(root, "documents");
+    await mkdir(documents, { recursive: true });
+    await mkdir(path.join(root, "config"), { recursive: true, mode: 0o700 });
+    await writeFile(
+      path.join(root, "config", "policy.json"),
+      JSON.stringify({
+        session_approval: { enabled: true, risks: ["file_attach"] },
+        file_attach: { enabled: true, allowed_directories: [documents] }
+      }),
+      { mode: 0o600 }
+    );
+    const attachment = path.join(documents, "report.txt");
+    await writeFile(attachment, "quarterly numbers");
+
+    const harness = await startHarness({}, root);
+    const extension = await connectExtension(
+      harness,
+      makeSigningIdentity("88888888-8888-4888-8888-888888888888")
+    );
+    const params = { browser_id: extension.browserId, tab_id: 3, frame_id: 0, ref: "bw-1", path: attachment };
+
+    const call = ipcCall(harness, "attach_file", params);
+    const command = await extension.next("command");
+    const payload = isJsonObjectForTest(command.payload) ? command.payload : {};
+    const file = isJsonObjectForTest(payload.file) ? payload.file : {};
+    expect(file).toMatchObject({ name: "report.txt", mime_type: "text/plain", size: 17 });
+    // The absolute path must never reach the browser; only the basename does.
+    expect(JSON.stringify(payload)).not.toContain(documents);
+    expect(Buffer.from(String(file.base64), "base64").toString("utf8")).toBe("quarterly numbers");
+
+    extension.socket.send(commandFailure(command, FINGERPRINT_A, UNTRUSTED_LABEL, "file_attach"));
+    const approvalRequest = await extension.next("approval_request");
+    expect(await call).toMatchObject({
+      ok: true,
+      result: { approval_required: true, session_approval_available: true }
+    });
+
+    const begin = await ipcCall(harness, "session_approval_begin", {
+      approval_id: approvalRequest.approval_id as string
+    });
+    const beginResult = isJsonObjectForTest(begin.result) ? begin.result : {};
+    const beginFile = isJsonObjectForTest(beginResult.file) ? beginResult.file : {};
+    expect(beginFile).toMatchObject({ name: "report.txt", size: 17 });
+    expect(String(beginFile.sha256)).toMatch(/^[a-f0-9]{64}$/u);
+    // The confirmation facts identify the file without carrying its contents.
+    expect(JSON.stringify(beginResult)).not.toContain(String(file.base64));
+
+    await ipcCall(harness, "session_approval_submit", {
+      approval_id: approvalRequest.approval_id as string,
+      decision: "approve",
+      confirmation_phrase: String(beginResult.confirmation_phrase)
+    });
+
+    // Changing the file must not be able to ride the approval given for the
+    // bytes the human actually confirmed.
+    await writeFile(attachment, "different numbers");
+    const tampered = ipcCall(harness, "attach_file", params);
+    const tamperedCommand = await extension.next("command");
+    expect(tamperedCommand.approved).toBe(false);
+    extension.socket.send(commandFailure(tamperedCommand, FINGERPRINT_B, UNTRUSTED_LABEL, "file_attach"));
+    await extension.next("approval_request");
+    expect(await tampered).toMatchObject({ ok: true, result: { approval_required: true } });
+
+    await writeFile(attachment, "quarterly numbers");
+    const retry = ipcCall(harness, "attach_file", params);
+    const liveCheck = await extension.next("command");
+    expect(liveCheck).toMatchObject({ approved: false, revalidate_only: true });
+    extension.socket.send(commandFailure(liveCheck, FINGERPRINT_A, UNTRUSTED_LABEL, "file_attach"));
+    const approved = await extension.next("command");
+    expect(approved).toMatchObject({ approved: true, approval_source: "session" });
+    extension.socket.send(JSON.stringify({
+      type: "result",
+      id: approved.id,
+      ok: true,
+      result: { attached: true }
+    }));
+    expect(await retry).toMatchObject({ ok: true, result: { attached: true } });
+
+    await harness.daemon.stop("attach_audit_flush");
+    const audit = await readFile(harness.config.auditLogPath, "utf8");
+    expect(audit).not.toContain(documents);
+    expect(audit).not.toContain("report.txt");
+  });
+
+  it("refuses to read a file the owner policy does not allow", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "browseweave-daemon-"));
+    const documents = path.join(root, "documents");
+    const elsewhere = path.join(root, "elsewhere");
+    await mkdir(documents, { recursive: true });
+    await mkdir(elsewhere, { recursive: true });
+    await mkdir(path.join(root, "config"), { recursive: true, mode: 0o700 });
+    await writeFile(
+      path.join(root, "config", "policy.json"),
+      JSON.stringify({ file_attach: { enabled: true, allowed_directories: [documents] } }),
+      { mode: 0o600 }
+    );
+    await writeFile(path.join(elsewhere, "secret.txt"), "outside");
+
+    const harness = await startHarness({}, root);
+    const extension = await connectExtension(
+      harness,
+      makeSigningIdentity("99999999-9999-4999-8999-999999999999")
+    );
+    const refused = await ipcCall(harness, "attach_file", {
+      browser_id: extension.browserId,
+      tab_id: 3,
+      ref: "bw-1",
+      path: path.join(elsewhere, "secret.txt")
+    });
+    expect(refused).toMatchObject({ ok: false });
+    expect(String(isJsonObjectForTest(refused) ? refused.error : "")).toMatch(/outside every directory/);
+  });
+
   it("confirms a session-approvable risk in the session and marks the executed command as session-sourced", async () => {
     const harness = await startSessionApprovalHarness();
     const extension = await connectExtension(

@@ -23,7 +23,14 @@ The MCP transport is client-neutral. Automatic configuration is currently implem
 - Capture the visible viewport when layout, images, canvas, or an ambiguous state matters.
 - Use short-lived screenshot-bound coordinates for custom widgets that have no semantic reference.
 - Heuristically detect supported sensitive-action patterns—such as messages, publishing, payments, deletion, credentials, 2FA, and security changes—and pause detected actions for human approval.
+- Attach a local file to a page's file input, if the user has allowed its directory, without opening the operating-system file picker.
 - Connect more than one browser profile without mixing their tab IDs or approval keys.
+
+Attaching a file sends it from the computer to a website, so it is off by default, always requires explicit human confirmation, and only reads from directories the user listed in an owner-only `policy.json`. Hidden files and directories — which covers `.ssh`, `.gnupg`, `.aws`, `.env`, and `.npmrc` — key and credential material, and unsupported file types are never attachable, even inside an allowed directory.
+
+```json
+{ "file_attach": { "enabled": true, "allowed_directories": ["/absolute/path/to/Documents"] } }
+```
 
 BrowseWeave controls permitted content inside ordinary HTTP(S) pages. It does not control browser menus, browser settings pages, extension-store pages, operating-system dialogs, file pickers, hardware security-key dialogs, or other privileged surfaces.
 

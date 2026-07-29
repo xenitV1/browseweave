@@ -1442,6 +1442,97 @@ async function credentialApply(payload: Record<string, unknown>): Promise<Record
   };
 }
 
+interface AttachableFilePayload {
+  name: string;
+  mime_type: string;
+  sha256: string;
+  size: number;
+  base64: string;
+}
+
+function parseAttachableFile(value: unknown): AttachableFilePayload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ContentError("attach_file_invalid", "The file to attach was not supplied correctly.");
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.name !== "string" || record.name.length === 0 || record.name.length > 255 ||
+    /[/\\\0]/u.test(record.name) ||
+    typeof record.mime_type !== "string" || !/^[\w.+-]+\/[\w.+-]+$/u.test(record.mime_type) ||
+    typeof record.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(record.sha256) ||
+    typeof record.size !== "number" || !Number.isSafeInteger(record.size) || record.size < 0 ||
+    typeof record.base64 !== "string" || !/^[A-Za-z0-9+/=]*$/u.test(record.base64)
+  ) {
+    throw new ContentError("attach_file_invalid", "The file to attach was not supplied correctly.");
+  }
+  return record as unknown as AttachableFilePayload;
+}
+
+function decodeBase64Bytes(base64: string): Uint8Array<ArrayBuffer> {
+  const binary = globalThis.atob(base64);
+  const bytes = new Uint8Array(new ArrayBuffer(binary.length));
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function fileInputForAttachment(element: Element): HTMLInputElement {
+  if (element instanceof HTMLInputElement && element.type === "file") return element;
+  const labelled = composedClosest(element, "label");
+  if (labelled instanceof HTMLLabelElement && labelled.control instanceof HTMLInputElement && labelled.control.type === "file") {
+    return labelled.control;
+  }
+  throw new ContentError(
+    "attach_file_target_invalid",
+    "That element is not a file input. Take a fresh snapshot and use the ref of the file field itself."
+  );
+}
+
+/**
+ * Places a file into a form without going near the operating-system picker,
+ * which no extension can drive and which would block the tab if opened. The
+ * file is assigned through a DataTransfer, exactly as a drag-and-drop upload
+ * would deliver it, then the page is notified with input and change.
+ */
+async function attachFile(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const element = elementForRef(payload.ref);
+  const input = fileInputForAttachment(element);
+  if (input.disabled) throw new ContentError("attach_file_target_invalid", "That file input is disabled.");
+  ensureVisible(input);
+
+  const spec = parseAttachableFile(payload.file);
+  const bytes = decodeBase64Bytes(spec.base64);
+  if (bytes.byteLength !== spec.size) {
+    throw new ContentError("attach_file_invalid", "The attached file did not arrive intact.");
+  }
+  const file = new File([bytes], spec.name, { type: spec.mime_type, lastModified: Date.now() });
+  const transfer = new DataTransfer();
+  transfer.items.add(file);
+
+  input.focus({ preventScroll: true });
+  try {
+    input.files = transfer.files;
+  } catch (error) {
+    throw new ContentError(
+      "attach_file_rejected",
+      `The page did not accept the attached file: ${error instanceof Error ? error.message : "unknown error"}`
+    );
+  }
+  if (input.files?.length !== 1 || input.files[0]?.name !== spec.name) {
+    throw new ContentError("attach_file_rejected", "The page did not retain the attached file.");
+  }
+  dispatchInput(input, "insertReplacementText", null);
+  input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+  return {
+    ref: registry.refFor(input),
+    attached: true,
+    file_name: spec.name,
+    mime_type: spec.mime_type,
+    size: spec.size,
+    sha256: spec.sha256
+  };
+}
+
 async function approvalTargetProbe(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   const material = {
     version: 1,
@@ -1504,6 +1595,24 @@ async function execute(request: ContentRequest): Promise<unknown> {
     case "hover": {
       const element = elementForRef(payload.ref);
       return hoverElement(element);
+    }
+    case "attach_file": {
+      const input = fileInputForAttachment(elementForRef(payload.ref));
+      // Attaching a local file is unconditionally sensitive; it is never left
+      // to the heuristics, in the same way a semantic-free coordinate click is
+      // never left to them.
+      const targets: RiskTarget[] = [{
+        action: "attach_file",
+        element: input,
+        forcedRisk: { category: "file_attach", reason: "Attaching a local file to this page" },
+        context: {
+          file_name: normalizeText((payload.file as Record<string, unknown> | undefined)?.name, 160),
+          sha256: normalizeText((payload.file as Record<string, unknown> | undefined)?.sha256, 64)
+        }
+      }];
+      const guard = await guardRisks(targets, request);
+      assertRiskTargetsUnchanged(targets, guard);
+      return attachFile(payload);
     }
     case "click_at": {
       const captureViewport = expectedCaptureViewport(payload);
