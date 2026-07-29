@@ -32,6 +32,7 @@ import {
   isJsonObject,
   isJsonValue,
   type ApprovalDecision,
+  type ApprovalSource,
   type BrowserAction,
   type BrowserIdentity,
   type ExtensionApprovalRequest,
@@ -182,6 +183,7 @@ interface CommandMessage {
   approved: boolean;
   approval_id?: string;
   approval_fingerprint?: string;
+  approval_source?: ApprovalSource;
   revalidate_only?: boolean;
 }
 
@@ -218,6 +220,9 @@ const AUTHENTICATION_TIMEOUT_MS = 10_000;
 const MAX_MUTATION_INTERVAL_MS = 5_000;
 /** How long a tab keeps the conservative pacing after a detected challenge. */
 const MUTATION_STRESS_WINDOW_MS = 60_000;
+const SESSION_APPROVAL_STORAGE_KEY = "browseweave_session_approval_v1";
+/** Comfortably longer than the daemon's approval TTL, so a replay always lands inside it. */
+const SESSION_APPROVAL_REPLAY_WINDOW_MS = 15 * 60_000;
 const SESSION_STATE_STORAGE_KEY = "browseweave_session_state_v2";
 const LOCAL_APPROVAL_GRANTS_SESSION_KEY = "browseweave_local_approval_grants_v2";
 
@@ -245,6 +250,8 @@ const pausedOrigins = new Map<string, HumanInterventionState["kind"]>();
 const mutationQueues = new Map<number, Promise<void>>();
 const lastMutationFinishedAt = new Map<number, number>();
 const mutationStressUntil = new Map<number, number>();
+/** Session-approved IDs already executed, so a replay cannot run twice. */
+const consumedSessionApprovals = new Map<string, number>();
 
 const MUTATING_ACTIONS = new Set<BrowserAction>([
   "hover", "click_at", "click", "type", "fill_form", "credential_fill", "press", "scroll",
@@ -489,6 +496,44 @@ async function revokeLocalApprovalGrantsForTarget(targetTabId: number, targetFra
     if (localApprovalGrants.revokeForTarget(targetTabId, targetFrameId) === 0) return;
     await persistLocalApprovalGrantsUnlocked();
   });
+}
+
+/**
+ * The browser owner's opt-in for session-confirmed approvals. It lives in
+ * extension storage and is writable only from the trusted settings page, so the
+ * daemon alone can never enable this weaker authority. Absent means off.
+ */
+async function sessionApprovalEnabled(): Promise<boolean> {
+  try {
+    const stored = await extensionBrowser.storage.local.get(SESSION_APPROVAL_STORAGE_KEY);
+    return stored[SESSION_APPROVAL_STORAGE_KEY] === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Second gate for a session-confirmed command, independent of the content
+ * script's live risk check. Fails closed on a disabled toggle or a replayed ID.
+ */
+async function consumeSessionApproval(approvalId: string): Promise<void> {
+  if (!await sessionApprovalEnabled()) {
+    throw new BridgeError(
+      "session_approval_disabled",
+      "Session-confirmed approval is turned off in BrowseWeave settings. Approve this action in the extension instead."
+    );
+  }
+  const now = Date.now();
+  for (const [id, expiresAt] of consumedSessionApprovals) {
+    if (expiresAt <= now) consumedSessionApprovals.delete(id);
+  }
+  if (consumedSessionApprovals.has(approvalId)) {
+    throw new BridgeError(
+      "session_approval_replayed",
+      "That session confirmation was already used. Request the action again."
+    );
+  }
+  consumedSessionApprovals.set(approvalId, now + SESSION_APPROVAL_REPLAY_WINDOW_MS);
 }
 
 async function consumeLocalApprovalGrant(
@@ -1558,6 +1603,7 @@ async function handleCommand(command: CommandMessage, currentSocket: WebSocket, 
       throw new BridgeError("unsupported_action", `Unsupported browser action: ${command.action}`);
     }
     const suppliedFingerprint = isApprovalFingerprint(command.approval_fingerprint) ? command.approval_fingerprint : "";
+    const approvalSource: ApprovalSource = command.approval_source === "session" ? "session" : "extension_signed";
     let executionPayload = command.payload;
     if (command.approved) {
       if (!APPROVAL_CONTEXT_ACTIONS.has(command.action)) {
@@ -1568,14 +1614,21 @@ async function handleCommand(command: CommandMessage, currentSocket: WebSocket, 
       const targetFrameId = command.action === "click_at" || command.action === "navigate"
         ? 0
         : frameIdFrom(command.payload);
-      await consumeLocalApprovalGrant(
-        command.approval_id as string,
-        command.action,
-        command.payload as JsonObject,
-        suppliedFingerprint,
-        targetTabId,
-        targetFrameId
-      );
+      if (approvalSource === "session") {
+        // No extension-signed grant exists for this authority, so the owner's
+        // opt-in and replay ledger stand in its place. The content script
+        // independently rejects any risk class that is not session-approvable.
+        await consumeSessionApproval(command.approval_id as string);
+      } else {
+        await consumeLocalApprovalGrant(
+          command.approval_id as string,
+          command.action,
+          command.payload as JsonObject,
+          suppliedFingerprint,
+          targetTabId,
+          targetFrameId
+        );
+      }
       // Lock an omitted active-tab target to the exact tab whose grant was
       // consumed. A later focus change cannot redirect the approved action.
       executionPayload = { ...command.payload, tab_id: targetTabId };
@@ -1585,7 +1638,8 @@ async function handleCommand(command: CommandMessage, currentSocket: WebSocket, 
       executionPayload,
       command.approved,
       suppliedFingerprint,
-      command.revalidate_only
+      command.revalidate_only,
+      approvalSource
     );
     response = { type: "result", id: command.id, ok: true, result: result ?? null };
   } catch (error) {
@@ -1631,7 +1685,8 @@ async function sendContentCommand(
   approved: boolean,
   suppliedFingerprint = "",
   revalidateOnly = false,
-  retry = true
+  retry = true,
+  approvalSource: ApprovalSource = "extension_signed"
 ): Promise<unknown> {
   try {
     const reply = await extensionBrowser.tabs.sendMessage(tabId(tab), {
@@ -1640,6 +1695,7 @@ async function sendContentCommand(
       payload,
       approved,
       approval_fingerprint: suppliedFingerprint,
+      approval_source: approvalSource,
       revalidate_only: revalidateOnly,
       approval_context: { tab_id: tabId(tab), frame_id: frameId }
     }, { frameId }) as ContentReply;
@@ -1663,7 +1719,9 @@ async function sendContentCommand(
     if (error instanceof BridgeError && error.code !== "invalid_content_response") throw error;
     if (retry) {
       await injectContentScript(tab);
-      return sendContentCommand(tab, frameId, action, payload, approved, suppliedFingerprint, revalidateOnly, false);
+      return sendContentCommand(
+        tab, frameId, action, payload, approved, suppliedFingerprint, revalidateOnly, false, approvalSource
+      );
     }
     if (error instanceof BridgeError) throw error;
     throw new BridgeError(
@@ -1808,7 +1866,8 @@ async function executeCommandWithGuards(
   payload: Record<string, unknown>,
   approved: boolean,
   suppliedFingerprint: string,
-  revalidateOnly: boolean
+  revalidateOnly: boolean,
+  approvalSource: ApprovalSource = "extension_signed"
 ): Promise<unknown> {
   if ((approved || revalidateOnly) && !APPROVAL_CONTEXT_ACTIONS.has(action)) {
     throw new BridgeError(
@@ -1822,13 +1881,13 @@ async function executeCommandWithGuards(
     if (PAGE_GUARDED_READ_ACTIONS.has(action)) {
       const tab = await targetTab(payload);
       if (tabOrigin(tab)) await guardHumanIntervention(tab);
-      return executeCommand(action, { ...payload, tab_id: tabId(tab) }, approved, suppliedFingerprint, revalidateOnly);
+      return executeCommand(action, { ...payload, tab_id: tabId(tab) }, approved, suppliedFingerprint, revalidateOnly, approvalSource);
     }
-    return executeCommand(action, payload, approved, suppliedFingerprint, revalidateOnly);
+    return executeCommand(action, payload, approved, suppliedFingerprint, revalidateOnly, approvalSource);
   }
 
   if (action === "cleanup_tabs") {
-    return executeCommand(action, payload, approved, suppliedFingerprint, revalidateOnly);
+    return executeCommand(action, payload, approved, suppliedFingerprint, revalidateOnly, approvalSource);
   }
 
   let tab: browser.tabs.Tab | undefined;
@@ -1843,7 +1902,7 @@ async function executeCommandWithGuards(
   return runSerializedMutation(queueId, interval, async () => {
     if (tab && DOM_GUARDED_ACTIONS.has(action) && tabOrigin(tab)) await guardHumanIntervention(tab);
     // There is intentionally no automatic retry here. The caller receives the first result.
-    return executeCommand(action, lockedPayload, approved, suppliedFingerprint, revalidateOnly);
+    return executeCommand(action, lockedPayload, approved, suppliedFingerprint, revalidateOnly, approvalSource);
   });
 }
 
@@ -2397,7 +2456,8 @@ async function executeCommand(
   payload: Record<string, unknown>,
   approved: boolean,
   suppliedFingerprint: string,
-  revalidateOnly: boolean
+  revalidateOnly: boolean,
+  approvalSource: ApprovalSource = "extension_signed"
 ): Promise<unknown> {
   if (action === "list_tabs") {
     const tabs = await extensionBrowser.tabs.query({});
@@ -2432,11 +2492,15 @@ async function executeCommand(
   if (action === "click_at") {
     const tab = await targetTab(payload);
     const securedPayload = await securedClickAtPayload(tab, payload);
-    return sendContentCommand(tab, 0, action, securedPayload, approved, suppliedFingerprint, revalidateOnly);
+    return sendContentCommand(
+      tab, 0, action, securedPayload, approved, suppliedFingerprint, revalidateOnly, true, approvalSource
+    );
   }
   if (CONTENT_ACTIONS.has(action)) {
     const tab = await targetTab(payload);
-    return sendContentCommand(tab, frameIdFrom(payload), action, payload, approved, suppliedFingerprint, revalidateOnly);
+    return sendContentCommand(
+      tab, frameIdFrom(payload), action, payload, approved, suppliedFingerprint, revalidateOnly, true, approvalSource
+    );
   }
   if (action === "screenshot") {
     const tab = await targetTab(payload);
@@ -2632,6 +2696,7 @@ async function uiStatus(): Promise<Record<string, unknown>> {
     credential_handoffs: credentialHandoffs,
     remote_credential_permissions: remoteCredentialPermissionViews,
     credential_state_error: credentialStateErrorMessage || null,
+    session_approval_enabled: await sessionApprovalEnabled(),
     approvals: [...pendingApprovals.values()]
       .sort((left, right) => Date.parse(left.expires_at) - Date.parse(right.expires_at))
       .map(publicApproval)
@@ -2736,6 +2801,18 @@ extensionBrowser.runtime.onMessage.addListener((message: unknown, sender) => {
       return Promise.reject(new Error("The remote credential permission ID is invalid."));
     }
     return revokeRemoteCredentialPermission(record.permission_id).then(() => ({ ok: true }));
+  }
+  if (record.kind === "ui:set-session-approval") {
+    // Settings-page only. If any other surface could flip this, the weaker
+    // session authority would no longer require the browser owner's consent.
+    if (!fromOptions) return Promise.reject(new Error("Session-confirmed approval can be changed only from BrowseWeave Settings."));
+    if (typeof record.enabled !== "boolean") return Promise.reject(new Error("The session-approval setting must be true or false."));
+    const enabled = record.enabled;
+    return extensionBrowser.storage.local.set({ [SESSION_APPROVAL_STORAGE_KEY]: enabled }).then(() => {
+      if (!enabled) consumedSessionApprovals.clear();
+      void extensionBrowser.runtime.sendMessage({ kind: "bridge:session-approval", enabled }).catch(() => undefined);
+      return { ok: true, enabled };
+    });
   }
   return undefined;
 });

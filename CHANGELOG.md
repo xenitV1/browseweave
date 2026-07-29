@@ -6,6 +6,10 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Optional session-confirmed approval: for form submissions, message or publish actions, and off-site navigation, a human may confirm in the MCP client session by typing a daemon-generated four-word phrase, instead of approving in the extension popup. It is off by default and requires two independent opt-ins — an owner-only `policy.json` and a toggle in extension-owned Settings. Payments, deletion, passwords, one-time codes, account security, coordinate clicks, and both credential channels always keep the extension-signed decision. The confirmation phrase never enters a tool result, the audit log, extension UI, a page, or daemon output, and one wrong phrase discards the approval. This path rests on a weaker assumption than the default — that the MCP client relays human input honestly — which `SECURITY.md` now states explicitly.
+
 ### Fixed
 
 - Typed text now yields to the page between keystrokes, so debounced autocomplete, asynchronous framework state, and per-keystroke validators observe intermediate values instead of a single burst. Text beyond the paced ceiling keeps the previous immediate path.

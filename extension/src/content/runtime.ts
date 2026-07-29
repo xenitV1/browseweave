@@ -33,6 +33,7 @@ import {
   type ValidatedFillValue,
   type ViewportState
 } from "../shared/pure";
+import { isSessionApprovableRisk, type ApprovalSource } from "../../../src/core/protocol";
 import {
   safeCredentialLabel,
   scrubCredentialValues,
@@ -69,6 +70,7 @@ interface ContentRequest {
   approval_fingerprint?: string;
   revalidate_only?: boolean;
   approval_context?: { tab_id: number; frame_id: number };
+  approval_source?: ApprovalSource;
 }
 
 interface ContentResult {
@@ -418,6 +420,19 @@ async function guardRisks(targets: RiskTarget[], request: ContentRequest): Promi
         ? "The live target no longer requires approval. The previous approval context was invalidated without executing the action."
         : "The live target no longer matches the approved risk context. The action was not executed."
     );
+  }
+
+  // A session-confirmed approval rests on the MCP client relaying human input
+  // honestly, so it is checked against the risk assessed live here rather than
+  // against any class the daemon claimed. Tier A can never arrive this way.
+  if (request.approved === true && request.approval_source === "session") {
+    const blocked = assessed.find(({ risk }) => !isSessionApprovableRisk(risk.category));
+    if (blocked) {
+      throw new ContentError(
+        "session_approval_not_permitted",
+        `A ${blocked.risk.category} action requires approval in the browser extension and cannot be confirmed in the session. Nothing was executed.`
+      );
+    }
   }
 
   const context = request.approval_context || { tab_id: -1, frame_id: -1 };

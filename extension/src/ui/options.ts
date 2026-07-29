@@ -14,6 +14,7 @@ interface UiStatus {
   identity?: BrowserIdentityView | null;
   remote_credential_permissions?: Array<{ permission_id: string; origin: string; expires_at: string }>;
   credential_state_error?: string | null;
+  session_approval_enabled?: boolean;
 }
 
 const connectButton = document.querySelector<HTMLButtonElement>("#connect-native");
@@ -26,11 +27,19 @@ const installationLabel = document.querySelector<HTMLElement>("#installation-lab
 const remotePermissionsEmpty = document.querySelector<HTMLElement>("#remote-permissions-empty");
 const remotePermissionsList = document.querySelector<HTMLElement>("#remote-permissions-list");
 const permissionResult = document.querySelector<HTMLElement>("#permission-result");
+const sessionApprovalToggle = document.querySelector<HTMLInputElement>("#session-approval-toggle");
+const sessionApprovalResult = document.querySelector<HTMLElement>("#session-approval-result");
 
 function showResult(message: string, kind: "success" | "error" | "" = ""): void {
   if (!result) return;
   result.textContent = message;
   result.className = `result ${kind}`.trim();
+}
+
+function showSessionApprovalResult(message: string, kind: "success" | "error" | "" = ""): void {
+  if (!sessionApprovalResult) return;
+  sessionApprovalResult.textContent = message;
+  sessionApprovalResult.className = `result ${kind}`.trim();
 }
 
 function showPermissionResult(message: string, kind: "success" | "error" | "" = ""): void {
@@ -112,8 +121,27 @@ function renderStatus(status: UiStatus): void {
       : "Unavailable";
   }
   if (installationLabel) installationLabel.textContent = normalizeText(identity?.installation_id, 80) || "Unavailable";
+  if (sessionApprovalToggle) sessionApprovalToggle.checked = status.session_approval_enabled === true;
   renderRemotePermissions(status);
 }
+
+sessionApprovalToggle?.addEventListener("change", () => {
+  const enabled = sessionApprovalToggle.checked;
+  void browser.runtime.sendMessage({ kind: "ui:set-session-approval", enabled })
+    .then(() => {
+      showSessionApprovalResult(
+        enabled
+          ? "Session-confirmed approvals are on for form submissions, message or publish actions, and off-site navigation."
+          : "Session-confirmed approvals are off. Every sensitive action now waits for approval on this page.",
+        "success"
+      );
+      return refreshStatus();
+    })
+    .catch((error: unknown) => {
+      sessionApprovalToggle.checked = !enabled;
+      showSessionApprovalResult(error instanceof Error ? error.message : "The setting could not be changed.", "error");
+    });
+});
 
 async function refreshStatus(): Promise<void> {
   try {
@@ -168,7 +196,7 @@ removeButton?.addEventListener("click", async () => {
 browser.runtime.onMessage.addListener((message: unknown) => {
   if (message && typeof message === "object") {
     const kind = (message as Record<string, unknown>).kind;
-    if (kind === "bridge:state" || kind === "bridge:credentials") void refreshStatus();
+    if (kind === "bridge:state" || kind === "bridge:credentials" || kind === "bridge:session-approval") void refreshStatus();
   }
   return undefined;
 });

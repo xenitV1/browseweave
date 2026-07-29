@@ -37,6 +37,7 @@ import {
   isJsonObject,
   setupPairingClientProofPayload,
   type ApprovalDecision,
+  type ApprovalSource,
   type ApprovalRequiredResult,
   type BridgeStatus,
   type BrowserAction,
@@ -92,6 +93,13 @@ import {
   type ExtensionAuthenticationMode,
   type StoredExtensionKey
 } from "./key-registry.js";
+import {
+  DISABLED_SESSION_APPROVAL_POLICY,
+  createSessionChallenge,
+  loadSessionApprovalPolicy,
+  sessionChallengeMatches,
+  type SessionApprovalPolicy
+} from "./session-approval.js";
 
 // The npm surface is `dist/src/daemon.js`, which re-exports this file. Keep
 // these names exported from here so the published entrypoint does not change.
@@ -142,6 +150,12 @@ interface PendingApproval {
   expiresAtIso: string;
   state: ApprovalState;
   timer: ReturnType<typeof setTimeout>;
+  /** Present only when the owner's policy allows confirming this risk in-session. */
+  sessionChallenge?: string;
+  /** A wrong phrase destroys the approval, so only one attempt is ever possible. */
+  sessionAttempted?: boolean;
+  /** Which authority approved it; drives what the extension requires to execute. */
+  approvalSource?: ApprovalSource;
 }
 
 type IpcPhase = "await_client_hello" | "await_request" | "accepted";
@@ -343,6 +357,7 @@ export class BrowseWeaveDaemon {
   readonly #browserIdByInstallation = new Map<string, string>();
   readonly #pendingCommands = new Map<string, PendingCommand>();
   readonly #pendingApprovals = new Map<string, PendingApproval>();
+  #sessionPolicy: SessionApprovalPolicy = DISABLED_SESSION_APPROVAL_POLICY;
   #setupPairingSession: SetupPairingSession | undefined;
   #legacyPairingSession: LegacyPairingSession | undefined;
   #wsServer: WebSocketServer | undefined;
@@ -368,6 +383,9 @@ export class BrowseWeaveDaemon {
     await ensurePrivateDirectory(this.#config.configDir);
     await ensurePrivateDirectory(this.#config.stateDir);
     await this.#keyRegistry.load();
+    // Read once at startup so a policy change is a deliberate restart rather
+    // than something that can take effect mid-session.
+    this.#sessionPolicy = await loadSessionApprovalPolicy(this.#config.configDir);
     this.#startedAt = Date.now();
     try {
       await this.#audit.start();
@@ -1356,6 +1374,14 @@ export class BrowseWeaveDaemon {
       this.#handleLegacyPairingBegin(socket, request.id, request.params);
       return;
     }
+    if (request.method === "session_approval_begin") {
+      this.#handleSessionApprovalBegin(socket, request.id, request.params);
+      return;
+    }
+    if (request.method === "session_approval_submit") {
+      this.#handleSessionApprovalSubmit(socket, request.id, request.params);
+      return;
+    }
     if (!isBrowserAction(request.method)) {
       this.#writeFailure(socket, request.id, `Unsupported BrowseWeave method: ${request.method}`);
       return;
@@ -1393,7 +1419,8 @@ export class BrowseWeaveDaemon {
       false,
       undefined,
       approvedGrant !== undefined,
-      approvedGrant?.approvalId
+      approvedGrant?.approvalId,
+      approvedGrant?.approvalSource
     );
   }
 
@@ -1633,7 +1660,8 @@ export class BrowseWeaveDaemon {
     approvalFingerprint?: string,
     revalidateOnly = false,
     revalidatingApprovalId?: string,
-    approvedGrantId?: string
+    approvedGrantId?: string,
+    approvalSource?: ApprovalSource
   ): void {
     if (session.socket.readyState !== WebSocket.OPEN) {
       if (approvedGrantId !== undefined) {
@@ -1672,7 +1700,8 @@ export class BrowseWeaveDaemon {
         revalidate_only: false,
         approved: true,
         approval_id: approvedGrantId,
-        approval_fingerprint: approvalFingerprint
+        approval_fingerprint: approvalFingerprint,
+        approval_source: approvalSource ?? "extension_signed"
       };
     } else {
       command = {
@@ -1885,7 +1914,8 @@ export class BrowseWeaveDaemon {
             fingerprint,
             false,
             undefined,
-            consumedGrant.approvalId
+            consumedGrant.approvalId,
+            consumedGrant.approvalSource
           );
           return;
         }
@@ -2019,6 +2049,9 @@ export class BrowseWeaveDaemon {
       state: "pending",
       timer: setTimeout(() => this.#expireApproval(approvalId), this.#config.approvalTtlMs)
     };
+    if (this.#sessionPolicy.enabled && this.#sessionPolicy.risks.has(approval.risk)) {
+      approval.sessionChallenge = createSessionChallenge();
+    }
     approval.timer.unref();
     this.#pendingApprovals.set(approvalId, approval);
 
@@ -2059,9 +2092,91 @@ export class BrowseWeaveDaemon {
       description: approval.description,
       action: approval.action,
       expires_at: approval.expiresAtIso,
-      message: "Approve or reject this operation in the target browser extension, then retry the same action."
+      message: approval.sessionChallenge === undefined
+        ? "Approve or reject this operation in the target browser extension, then retry the same action."
+        : "Confirm this operation with the user in this session, or approve it in the target browser extension, then retry the same action.",
+      session_approval_available: approval.sessionChallenge !== undefined
     };
     this.#writeSuccess(client, requestId, result);
+  }
+
+  /**
+   * Issues the confirmation phrase to the MCP server over authenticated IPC.
+   * The phrase is never written to a tool result or the audit log, so a page
+   * cannot learn it and replay a confirmation the human never gave.
+   */
+  #handleSessionApprovalBegin(socket: Socket, requestId: string, params: JsonObject): void {
+    if (!hasExactFields(params, new Set(["approval_id"])) || typeof params.approval_id !== "string") {
+      this.#writeFailure(socket, requestId, "The session-approval request is invalid.");
+      return;
+    }
+    const approval = this.#pendingApprovals.get(params.approval_id);
+    if (approval === undefined || approval.expiresAt <= Date.now()) {
+      this.#writeFailure(socket, requestId, "That approval is unknown, already resolved, or expired.");
+      return;
+    }
+    if (approval.state !== "pending" || approval.sessionChallenge === undefined) {
+      this.#writeFailure(socket, requestId, "This action cannot be confirmed in the session. Approve it in the browser extension.");
+      return;
+    }
+    this.#writeSuccess(socket, requestId, {
+      approval_id: approval.approvalId,
+      action: approval.action,
+      risk: approval.risk,
+      description: approval.description,
+      browser_id: approval.browserId,
+      target_tab_id: approval.targetTabId,
+      target_frame_id: approval.targetFrameId,
+      expires_at: approval.expiresAtIso,
+      confirmation_phrase: approval.sessionChallenge
+    });
+  }
+
+  /**
+   * Accepts one human decision relayed from the MCP client. A wrong phrase
+   * destroys the approval instead of allowing another attempt, so the phrase
+   * cannot be ground down within its lifetime.
+   */
+  #handleSessionApprovalSubmit(socket: Socket, requestId: string, params: JsonObject): void {
+    const fields = new Set(["approval_id", "decision", "confirmation_phrase"]);
+    if (
+      !hasExactFields(params, fields) ||
+      typeof params.approval_id !== "string" ||
+      (params.decision !== "approve" && params.decision !== "reject")
+    ) {
+      this.#writeFailure(socket, requestId, "The session-approval decision is invalid.");
+      return;
+    }
+    const approval = this.#pendingApprovals.get(params.approval_id);
+    if (approval === undefined || approval.expiresAt <= Date.now()) {
+      this.#writeFailure(socket, requestId, "That approval is unknown, already resolved, or expired.");
+      return;
+    }
+    if (approval.state !== "pending" || approval.sessionChallenge === undefined || approval.sessionAttempted === true) {
+      this.#writeFailure(socket, requestId, "This approval can no longer be confirmed in the session.");
+      return;
+    }
+    approval.sessionAttempted = true;
+    if (!sessionChallengeMatches(approval.sessionChallenge, params.confirmation_phrase)) {
+      this.#takeApproval(approval.approvalId);
+      this.#audit.record({ event: "approval", action: approval.action, outcome: "session_phrase_mismatch" });
+      this.#writeFailure(
+        socket,
+        requestId,
+        "The confirmation phrase did not match. The approval was discarded; request the action again to get a new one."
+      );
+      return;
+    }
+    if (params.decision === "reject") {
+      this.#takeApproval(approval.approvalId);
+      this.#audit.record({ event: "approval", action: approval.action, outcome: "session_rejected" });
+      this.#writeSuccess(socket, requestId, { approval_id: approval.approvalId, decision: "reject" });
+      return;
+    }
+    approval.state = "approved";
+    approval.approvalSource = "session";
+    this.#audit.record({ event: "approval", action: approval.action, outcome: "session_approved" });
+    this.#writeSuccess(socket, requestId, { approval_id: approval.approvalId, decision: "approve" });
   }
 
   async #handleApprovalDecision(session: BrowserSession, message: JsonObject): Promise<void> {

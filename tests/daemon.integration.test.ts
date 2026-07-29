@@ -44,7 +44,8 @@ import {
   type IpcResponse,
   type JsonObject,
   type P256PublicJwk,
-  type SetupPairingResponse
+  type SetupPairingResponse,
+  SESSION_CHALLENGE_PATTERN
 } from "../src/core/protocol.js";
 
 const TOKEN = "a".repeat(64);
@@ -785,7 +786,12 @@ async function connectExtensionAfterUnauthenticatedStorm(
   }
 }
 
-function commandFailure(command: JsonObject, fingerprint: string, label = UNTRUSTED_LABEL): string {
+function commandFailure(
+  command: JsonObject,
+  fingerprint: string,
+  label = UNTRUSTED_LABEL,
+  category = "password"
+): string {
   const commandPayload = isJsonObjectForTest(command.payload) ? command.payload : {};
   const targetTabId = typeof commandPayload.tab_id === "number" ? commandPayload.tab_id : 1;
   const targetFrameId = typeof commandPayload.frame_id === "number" ? commandPayload.frame_id : 0;
@@ -796,7 +802,7 @@ function commandFailure(command: JsonObject, fingerprint: string, label = UNTRUS
     error: {
       code: "approval_required",
       message: "A sensitive operation requires approval.",
-      category: "password",
+      category,
       approval_fingerprint: fingerprint,
       target_tab_id: targetTabId,
       target_frame_id: targetFrameId,
@@ -1862,6 +1868,135 @@ describe("BrowseWeave daemon integration", () => {
     await harness.daemon.stop("credential_audit_flush");
     const audit = await readFile(harness.config.auditLogPath, "utf8");
     expect(audit).not.toContain(SECRET_TEXT);
+  });
+
+  async function startSessionApprovalHarness(risks = ["form_submit"]): Promise<Harness> {
+    const root = await mkdtemp(path.join(tmpdir(), "browseweave-daemon-"));
+    await mkdir(path.join(root, "config"), { recursive: true, mode: 0o700 });
+    await writeFile(
+      path.join(root, "config", "policy.json"),
+      JSON.stringify({ session_approval: { enabled: true, risks } }),
+      { mode: 0o600 }
+    );
+    return startHarness({}, root);
+  }
+
+  it("confirms a session-approvable risk in the session and marks the executed command as session-sourced", async () => {
+    const harness = await startSessionApprovalHarness();
+    const extension = await connectExtension(
+      harness,
+      makeSigningIdentity("55555555-5555-4555-8555-555555555555")
+    );
+    const params = { browser_id: extension.browserId, tab_id: 4, frame_id: 0, ref: "bw-9" };
+
+    const firstCall = ipcCall(harness, "click", params);
+    const firstCommand = await extension.next("command");
+    extension.socket.send(commandFailure(firstCommand, FINGERPRINT_A, UNTRUSTED_LABEL, "form_submit"));
+    const approvalRequest = await extension.next("approval_request");
+    expect(await firstCall).toMatchObject({
+      ok: true,
+      result: { approval_required: true, session_approval_available: true }
+    });
+
+    const begin = await ipcCall(harness, "session_approval_begin", {
+      approval_id: approvalRequest.approval_id as string
+    });
+    const challenge = isJsonObjectForTest(begin.result) ? String(begin.result.confirmation_phrase) : "";
+    expect(SESSION_CHALLENGE_PATTERN.test(challenge)).toBe(true);
+
+    // The phrase must never be reachable from a tool result or the audit log.
+    expect(JSON.stringify(await firstCall)).not.toContain(challenge);
+
+    const submitted = await ipcCall(harness, "session_approval_submit", {
+      approval_id: approvalRequest.approval_id as string,
+      decision: "approve",
+      confirmation_phrase: challenge
+    });
+    expect(submitted).toMatchObject({ ok: true, result: { decision: "approve" } });
+
+    const retry = ipcCall(harness, "click", params);
+    const liveCheck = await extension.next("command");
+    expect(liveCheck).toMatchObject({ approved: false, revalidate_only: true });
+    extension.socket.send(commandFailure(liveCheck, FINGERPRINT_A, UNTRUSTED_LABEL, "form_submit"));
+    const approvedCommand = await extension.next("command");
+    expect(approvedCommand).toMatchObject({
+      approved: true,
+      approval_id: approvalRequest.approval_id,
+      approval_source: "session"
+    });
+    extension.socket.send(JSON.stringify({
+      type: "result",
+      id: approvedCommand.id,
+      ok: true,
+      result: { clicked: true }
+    }));
+    expect(await retry).toMatchObject({ ok: true, result: { clicked: true } });
+
+    await harness.daemon.stop("session_approval_audit_flush");
+    const audit = await readFile(harness.config.auditLogPath, "utf8");
+    expect(audit).not.toContain(challenge);
+    expect(audit).toContain("session_approved");
+  });
+
+  it("destroys the approval after one wrong confirmation phrase", async () => {
+    const harness = await startSessionApprovalHarness(["message"]);
+    const extension = await connectExtension(
+      harness,
+      makeSigningIdentity("66666666-6666-4666-8666-666666666666")
+    );
+    const params = { browser_id: extension.browserId, tab_id: 5, frame_id: 0, ref: "bw-2" };
+
+    const call = ipcCall(harness, "click", params);
+    const command = await extension.next("command");
+    extension.socket.send(commandFailure(command, FINGERPRINT_A, UNTRUSTED_LABEL, "message"));
+    const approvalRequest = await extension.next("approval_request");
+    await call;
+
+    const begin = await ipcCall(harness, "session_approval_begin", {
+      approval_id: approvalRequest.approval_id as string
+    });
+    const challenge = isJsonObjectForTest(begin.result) ? String(begin.result.confirmation_phrase) : "";
+
+    const wrong = await ipcCall(harness, "session_approval_submit", {
+      approval_id: approvalRequest.approval_id as string,
+      decision: "approve",
+      confirmation_phrase: "amber cedar flint onyx"
+    });
+    expect(wrong).toMatchObject({ ok: false });
+
+    // The correct phrase must not rescue an approval already spent on a guess.
+    const retryWithTruth = await ipcCall(harness, "session_approval_submit", {
+      approval_id: approvalRequest.approval_id as string,
+      decision: "approve",
+      confirmation_phrase: challenge
+    });
+    expect(retryWithTruth).toMatchObject({ ok: false });
+    expect(await ipcCall(harness, "status")).toMatchObject({ ok: true, result: { pending_approvals: 0 } });
+  });
+
+  it("never offers session confirmation for a risk outside the opted-in tier", async () => {
+    const harness = await startSessionApprovalHarness(["form_submit"]);
+    const extension = await connectExtension(
+      harness,
+      makeSigningIdentity("77777777-7777-4777-8777-777777777777")
+    );
+    const params = { browser_id: extension.browserId, tab_id: 6, frame_id: 0, ref: "bw-4" };
+
+    const categories = ["password", "payment", "delete", "message"];
+    for (const [index, category] of categories.entries()) {
+      const call = ipcCall(harness, "click", { ...params, ref: `bw-${index + 20}` });
+      const command = await extension.next("command");
+      extension.socket.send(commandFailure(command, FINGERPRINT_A, UNTRUSTED_LABEL, category));
+      const approvalRequest = await extension.next("approval_request");
+      expect(await call).toMatchObject({
+        ok: true,
+        result: { approval_required: true, session_approval_available: false }
+      });
+      const begin = await ipcCall(harness, "session_approval_begin", {
+        approval_id: approvalRequest.approval_id as string
+      });
+      expect(begin).toMatchObject({ ok: false });
+    }
   });
 
   it("accepts only an extension-signed approval and consumes it once after a fresh live fingerprint", async () => {

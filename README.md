@@ -220,6 +220,12 @@ Only when the user explicitly wants those local application directories deleted,
 
 ## Human approval and site-respectful operation
 
+Approval normally happens in the browser extension. Optionally, the browser owner may allow a narrower path where the human confirms in the AI client session instead, by typing a phrase BrowseWeave generates. It is off by default, covers only form submissions, message/publish actions, and off-site navigation, and requires enabling it in **both** an owner-only `policy.json` and extension Settings. Payments, deletion, credentials, two-factor codes, account-security changes, and coordinate clicks always stay in the extension. It is deliberately weaker than the default: it trusts the AI client to relay what the human actually typed. Read [SECURITY.md](SECURITY.md#session-confirmed-approval-and-what-it-changes) before enabling it.
+
+```json
+{ "session_approval": { "enabled": true, "risks": ["form_submit", "message", "external_navigation"] } }
+```
+
 BrowseWeave applies this approval flow only when its supported heuristics classify a requested action as sensitive. Those heuristics can produce false positives and false negatives; they do not guarantee that every risky action will be detected. For an action that is detected, BrowseWeave sends the action details to the target browser extension, shows them in extension-owned UI, and accepts only a signed, short-lived, single-use decision. If the page, target, tab, parameters, or live target fingerprint changes, the old approval is invalid. The UI shows the browser-verified current pre-action destination; page JavaScript, server behavior, or a later redirect can still change the final destination. This reduces risk but is not a complete safety guarantee.
 
 BrowseWeave uses the user's visible browser; it does not use WebDriver, headless mode, or Marionette. That removes one common automation signal, but no software can honestly guarantee that a website will never detect automation or restrict an account.

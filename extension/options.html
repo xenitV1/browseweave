@@ -50,6 +50,19 @@
         <p id="permission-result" class="result" role="status" aria-live="polite"></p>
       </section>
 
+      <section class="explanation" aria-labelledby="session-approval-title">
+        <h2 id="session-approval-title">Confirm approvals in the AI session</h2>
+        <p class="card-copy">Off by default. When on, form submissions, message or publish actions, and navigation away from the current site may be confirmed by you in the AI client instead of here. You type a phrase this computer generates; a wrong phrase discards the request.</p>
+        <p class="card-copy">This is weaker than approving here, because it trusts your AI client to pass on what you actually typed. Payments, deletion, passwords, two-factor codes, account-security changes, and coordinate clicks always stay on this page. Your local BrowseWeave policy file must allow it too.</p>
+        <p class="toggle-row">
+          <label for="session-approval-toggle">
+            <input type="checkbox" id="session-approval-toggle">
+            Allow session-confirmed approvals
+          </label>
+        </p>
+        <p id="session-approval-result" class="result" role="status" aria-live="polite"></p>
+      </section>
+
       <section class="explanation">
         <h2>Safety boundaries</h2>
         <ul>
