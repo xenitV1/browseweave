@@ -3,7 +3,7 @@ import { lstat, open, readdir, readFile } from "node:fs/promises";
 import { userInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extensionTreeDigest } from "./flow.js";
+import { extensionTreeDigest, managedExtensionParentPath } from "./flow.js";
 import { APP_VERSION, BROWSER_EXTENSION_VERSION } from "../core/version.js";
 
 const CHROMIUM_EXTENSION_ID_PATTERN = /^[a-p]{32}$/u;
@@ -28,23 +28,8 @@ function chromeUserDataPath(platform: NodeJS.Platform, home: string): string {
 }
 
 function managedChromiumExtensionPath(platform: NodeJS.Platform, home: string): string {
-  if (platform === "linux") {
-    return path.posix.join(home, ".local", "share", "browseweave", "extension", "chromium-mv3");
-  }
-  if (platform === "darwin") {
-    return path.posix.join(
-      home,
-      "Library",
-      "Application Support",
-      "BrowseWeave",
-      "extension",
-      "chromium-mv3"
-    );
-  }
-  if (platform === "win32") {
-    return path.win32.join(home, "AppData", "Local", "BrowseWeave", "extension", "chromium-mv3");
-  }
-  throw new Error(`Unsupported operating system: ${platform}`);
+  const pathApi = pathApiFor(platform);
+  return pathApi.join(managedExtensionParentPath(home, platform), "chromium-mv3");
 }
 
 function pathApiFor(platform: NodeJS.Platform): typeof path.posix | typeof path.win32 {

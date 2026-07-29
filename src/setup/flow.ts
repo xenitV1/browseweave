@@ -9,6 +9,16 @@ export const SETUP_SECRET_PATTERN = /^[a-f0-9]{64}$/u;
 
 export type SetupBrowserTarget = "chrome" | "zen";
 
+/**
+ * Stable browser-loaded extension directory shared by setup and Chrome
+ * identity discovery. Keeping this path calculation here prevents a move of
+ * the user-visible folder from leaving the post-enrollment verifier behind.
+ */
+export function managedExtensionParentPath(home: string, platform: NodeJS.Platform): string {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  return pathApi.join(home, "BrowseWeave");
+}
+
 /** A removed legacy copy must be replaced before an in-memory connection is reused. */
 export function shouldReuseConnectedBrowser(input: { newProfile: boolean; legacyCopyRemoved: boolean }): boolean {
   return !input.newProfile && !input.legacyCopyRemoved;

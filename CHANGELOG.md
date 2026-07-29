@@ -6,6 +6,14 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.4] - 2026-07-29
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
+### Fixed
+
+- Fixed guided Chrome setup after relocating the unpacked extension to the visible `~/BrowseWeave/chromium-mv3` directory. Setup and post-enrollment Chrome identity discovery now share one path calculation, so exact-origin native-host registration no longer looks for the removed legacy copy under `~/.local/share` after the browser has connected.
+
 ## [0.1.0-beta.3] - 2026-07-29
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
@@ -81,7 +89,8 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.3...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.4...HEAD
+[0.1.0-beta.4]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.3...v0.1.0-beta.4
 [0.1.0-beta.3]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.2...v0.1.0-beta.3
 [0.1.0-beta.2]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/xenitV1/browseweave/releases/tag/v0.1.0-beta.1

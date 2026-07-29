@@ -4,29 +4,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverLocalChromiumExtensionOrigins } from "../src/setup/chromium-extension-discovery.js";
 import { APP_VERSION, BROWSER_EXTENSION_VERSION } from "../src/core/version.js";
+import { managedExtensionParentPath } from "../src/setup/flow.js";
 
 const roots: string[] = [];
 const FIRST_ID = "abcdefghijklmnopabcdefghijklmnop";
 const SECOND_ID = "ponmlkjihgfedcbaponmlkjihgfedcba";
 
 function managedExtensionPath(home: string): string {
-  if (process.platform === "linux") {
-    return path.join(home, ".local", "share", "browseweave", "extension", "chromium-mv3");
-  }
-  if (process.platform === "darwin") {
-    return path.join(
-      home,
-      "Library",
-      "Application Support",
-      "BrowseWeave",
-      "extension",
-      "chromium-mv3"
-    );
-  }
-  if (process.platform === "win32") {
-    return path.join(home, "AppData", "Local", "BrowseWeave", "extension", "chromium-mv3");
-  }
-  throw new Error(`Unsupported test operating system: ${process.platform}`);
+  return path.join(managedExtensionParentPath(home, process.platform), "chromium-mv3");
 }
 
 afterEach(async () => {
@@ -86,6 +71,12 @@ async function addProfile(input: {
 }
 
 describe("local Chrome extension discovery", () => {
+  it("shares the visible setup directory on every supported platform", () => {
+    expect(managedExtensionParentPath("/home/example", "linux")).toBe("/home/example/BrowseWeave");
+    expect(managedExtensionParentPath("/Users/example", "darwin")).toBe("/Users/example/BrowseWeave");
+    expect(managedExtensionParentPath("C:\\Users\\example", "win32")).toBe("C:\\Users\\example\\BrowseWeave");
+  });
+
   it("accepts one enabled byte-exact unpacked BrowseWeave copy", async () => {
     const value = await fixture();
     await addProfile({ ...value, profile: "Default", id: FIRST_ID });

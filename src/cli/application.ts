@@ -42,6 +42,7 @@ import {
 } from "../native/service-plan.js";
 import {
   createSetupTicket,
+  managedExtensionParentPath,
   prepareManagedExtension,
   prepareSetupBeforeBrowserConsent,
   removeManagedExtensionCopy,
@@ -402,7 +403,7 @@ function assertManagedSetupEnvironment(): string {
  * so the integrity story is unchanged.
  */
 function managedExtensionParent(): string {
-  return path.join(assertManagedSetupEnvironment(), "BrowseWeave");
+  return managedExtensionParentPath(assertManagedSetupEnvironment(), process.platform);
 }
 
 /** The pre-relocation location, cleaned up so two enabled copies cannot coexist. */
