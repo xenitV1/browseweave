@@ -6,6 +6,17 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Typed text now yields to the page between keystrokes, so debounced autocomplete, asynchronous framework state, and per-keystroke validators observe intermediate values instead of a single burst. Text beyond the paced ceiling keeps the previous immediate path.
+- Scrolling advances in bounded steps instead of one jump, so `IntersectionObserver`, infinite-scroll, and virtualised-list handlers run for the traversed region and later snapshots no longer miss lazily loaded content.
+- Clicks and hovers emit a short pointer movement path ending exactly on the target, so hover-driven menus that gate on movement open as expected.
+
+### Changed
+
+- Page snapshots read frames concurrently with a bounded limit rather than one at a time, so a page with many third-party iframes costs the slowest frame instead of their sum. Frame ordering and truncation behaviour are unchanged.
+- Per-tab mutation pacing is adaptive: editing and scrolling continue at a tighter interval, actions that commit or navigate keep the previous conservative interval, and a tab backs off well beyond both for a period after a detected challenge, 403, or 429. Pacing remains per tab rather than per origin or IP.
+
 ## [0.1.0-beta.2] - 2026-07-28
 
 Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons release is claimed.

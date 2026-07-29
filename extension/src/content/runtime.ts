@@ -15,16 +15,20 @@ import {
   externalNavigationRisk,
   approvalFingerprint,
   isStableRef,
+  keystrokeIntervalMs,
   mapVisualCoordinates,
   normalizeSnapshotOptions,
   normalizeText,
   normalizeViewportState,
   normalizeWaitOptions,
+  pointerApproachPoints,
   sameViewportState,
+  scrollStepDeltas,
   sensitiveFieldCategory,
   sensitivePressDecision,
   stableSafetyMaterial,
   validateFillValue,
+  type PointerPoint,
   type RiskAssessment,
   type ValidatedFillValue,
   type ViewportState
@@ -506,6 +510,37 @@ function dispatchMouse(element: Element, type: string, button = 0): void {
   }));
 }
 
+/** Last position this document's synthetic pointer reached, for movement paths. */
+let lastPointerPoint: PointerPoint | undefined;
+
+/**
+ * Emits a short movement path ending exactly on the target. Menus and other
+ * hover-driven widgets frequently gate on movement rather than on a bare
+ * `pointerover`, so entering without a path leaves their content unopened and
+ * therefore missing from the next snapshot.
+ */
+function approachPointer(element: Element, x: number, y: number): void {
+  const from = lastPointerPoint ?? { x: Math.max(0, x - 48), y: Math.max(0, y - 36) };
+  for (const point of pointerApproachPoints(from, { x, y })) {
+    dispatchPointerAt(element, "pointermove", point.x, point.y, 0);
+    dispatchMouseAt(element, "mousemove", point.x, point.y, 0);
+  }
+  lastPointerPoint = { x, y };
+}
+
+function approachPointerToElement(element: Element): void {
+  const rect = element.getBoundingClientRect();
+  approachPointer(element, rect.left + rect.width / 2, rect.top + rect.height / 2);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise<void>((resolve) => { setTimeout(resolve, milliseconds); });
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
+}
+
 function rejectUnsupportedClickTarget(element: Element): void {
   const labelledControl = composedClosest(element, "label") instanceof HTMLLabelElement
     ? (composedClosest(element, "label") as HTMLLabelElement).control
@@ -543,6 +578,8 @@ function clickElement(
     : 1;
   (element as HTMLElement).scrollIntoView({ block: "center", inline: "center", behavior: "auto" });
   (element as HTMLElement).focus({ preventScroll: true });
+  safetyCheck();
+  approachPointerToElement(element);
   safetyCheck();
 
   for (let index = 0; index < clickCount; index += 1) {
@@ -612,6 +649,7 @@ function hoverElement(element: Element): Record<string, unknown> {
   const rect = element.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
   const y = rect.top + rect.height / 2;
+  approachPointer(element, x, y);
   dispatchPointerAt(element, "pointerover", x, y, 0);
   dispatchMouseAt(element, "mouseover", x, y, 0);
   dispatchPointerAt(element, "pointerenter", x, y, 0);
@@ -773,6 +811,7 @@ async function typeIntoElement(
     } else if (clear) {
       value = "";
     }
+    const keystrokeInterval = keystrokeIntervalMs(text.length);
     for (const character of text) {
       safetyCheck();
       emitKeyboard(element, "keydown", character);
@@ -786,6 +825,12 @@ async function typeIntoElement(
         dispatchInput(element, "insertText", character);
       }
       emitKeyboard(element, "keyup", character);
+      if (keystrokeInterval > 0) {
+        // Yields to the page's event loop so debounced and asynchronous
+        // per-keystroke handlers observe intermediate values.
+        await delay(keystrokeInterval);
+        safetyCheck();
+      }
     }
     element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     return { ref: registry.refFor(element), typed: true, length: text.length };
@@ -1042,8 +1087,21 @@ async function scrollPage(payload: Record<string, unknown>): Promise<Record<stri
   const maximumY = Math.max(0, container.scrollHeight - container.clientHeight);
   const nextX = boundedScroll(container.scrollLeft, maximumX, delta[0]);
   const nextY = boundedScroll(container.scrollTop, maximumY, delta[1]);
+  // Stepping the offset lets IntersectionObserver, infinite-scroll, and
+  // virtualised-list handlers run for the traversed region instead of being
+  // skipped by a single jump.
+  const stepsX = scrollStepDeltas(nextX.appliedDelta);
+  const stepsY = scrollStepDeltas(nextY.appliedDelta);
+  let stepX = container.scrollLeft;
+  let stepY = container.scrollTop;
+  for (let index = 0; index < Math.max(stepsX.length, stepsY.length); index += 1) {
+    stepX += stepsX[index] ?? 0;
+    stepY += stepsY[index] ?? 0;
+    container.scrollTo({ left: stepX, top: stepY, behavior: "auto" });
+    await nextAnimationFrame();
+  }
   container.scrollTo({ left: nextX.position, top: nextY.position, behavior: "auto" });
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await nextAnimationFrame();
   const documentContainer = container === document.scrollingElement || container === document.documentElement || container === document.body;
   return {
     container_ref: documentContainer ? "document" : registry.refFor(container),

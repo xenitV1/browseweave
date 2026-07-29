@@ -22,14 +22,22 @@ import {
   maskSensitiveValue,
   normalizeManagedTabIds,
   normalizeNavigationUrl,
+  keystrokeIntervalMs,
+  mutationIntervalMs,
+  MUTATION_INTERVAL_COMMITTING_MS,
+  MUTATION_INTERVAL_CONTINUING_MS,
+  MUTATION_INTERVAL_STRESSED_MS,
   normalizePagination,
   normalizeScreenshotOptions,
   normalizeSnapshotOptions,
   normalizeText,
   normalizeViewportState,
   normalizeWaitOptions,
+  pointerApproachPoints,
   redactUrl,
   sameViewportState,
+  scrollStepDeltas,
+  TYPING_MAX_INTERVAL_MS,
   selectChromiumBrand,
   selectManagedTabsForCleanup,
   sensitiveFieldCategory,
@@ -429,5 +437,60 @@ describe("BrowseWeave extension pure safety functions", () => {
     expect(sameViewportState(capture, { ...capture, scroll_y: 241 })).toBe(false);
     expect(sameViewportState(capture, { ...capture, document_epoch: "document-epoch-b" })).toBe(false);
     expect(() => normalizeViewportState({ ...capture, document_epoch: "" })).toThrow(/document identity/);
+  });
+
+  it("paces keystrokes within a bounded budget and keeps long text on the fast path", () => {
+    expect(keystrokeIntervalMs(0)).toBe(0);
+    expect(keystrokeIntervalMs(1)).toBe(0);
+    // Short strings are capped so a few characters cannot each wait too long.
+    expect(keystrokeIntervalMs(5)).toBe(TYPING_MAX_INTERVAL_MS);
+    // The budget is shared across the string, so total latency stays bounded.
+    const interval = keystrokeIntervalMs(200);
+    expect(interval).toBeGreaterThan(0);
+    expect(interval * 199).toBeLessThanOrEqual(1_200);
+    // Beyond the paced ceiling the original zero-delay behaviour is restored so
+    // a large paste cannot approach the command timeout.
+    expect(keystrokeIntervalMs(401)).toBe(0);
+    expect(keystrokeIntervalMs(10_000)).toBe(0);
+    expect(keystrokeIntervalMs(Number.NaN)).toBe(0);
+  });
+
+  it("splits a scroll into bounded steps that sum to the requested distance", () => {
+    expect(scrollStepDeltas(0)).toEqual([]);
+    expect(scrollStepDeltas(Number.NaN)).toEqual([]);
+    for (const distance of [1, 120, 700, -700, 5_000, -12_345]) {
+      const steps = scrollStepDeltas(distance);
+      expect(steps.length).toBeGreaterThanOrEqual(1);
+      expect(steps.length).toBeLessThanOrEqual(8);
+      expect(steps.reduce((total, step) => total + step, 0)).toBe(distance);
+      expect(steps.every((step) => Number.isInteger(step))).toBe(true);
+      expect(steps.every((step) => distance > 0 ? step >= 0 : step <= 0)).toBe(true);
+    }
+    expect(scrollStepDeltas(100).length).toBe(1);
+  });
+
+  it("ends every pointer approach path exactly on the target", () => {
+    const path = pointerApproachPoints({ x: 0, y: 0 }, { x: 300, y: 150 });
+    expect(path).toHaveLength(3);
+    expect(path.at(-1)).toEqual({ x: 300, y: 150 });
+    expect(path.at(0)).not.toEqual({ x: 300, y: 150 });
+    // A zero-length move still terminates on the target rather than emitting nothing.
+    expect(pointerApproachPoints({ x: 10, y: 10 }, { x: 10, y: 10 }).at(-1)).toEqual({ x: 10, y: 10 });
+    expect(pointerApproachPoints({ x: Number.NaN, y: 0 }, { x: 10, y: 10 })).toEqual([]);
+  });
+
+  it("keeps editing tight, commits conservatively, and backs off under stress", () => {
+    expect(mutationIntervalMs({ action: "type" })).toBe(MUTATION_INTERVAL_CONTINUING_MS);
+    expect(mutationIntervalMs({ action: "fill_form" })).toBe(MUTATION_INTERVAL_CONTINUING_MS);
+    expect(mutationIntervalMs({ action: "scroll" })).toBe(MUTATION_INTERVAL_CONTINUING_MS);
+    expect(mutationIntervalMs({ action: "press", key: "a" })).toBe(MUTATION_INTERVAL_CONTINUING_MS);
+    // Anything that commits or navigates keeps the original conservative floor.
+    expect(mutationIntervalMs({ action: "click" })).toBe(MUTATION_INTERVAL_COMMITTING_MS);
+    expect(mutationIntervalMs({ action: "navigate" })).toBe(MUTATION_INTERVAL_COMMITTING_MS);
+    expect(mutationIntervalMs({ action: "press", key: "Enter" })).toBe(MUTATION_INTERVAL_COMMITTING_MS);
+    // Stress outranks every other classification.
+    expect(mutationIntervalMs({ action: "type", stressed: true })).toBe(MUTATION_INTERVAL_STRESSED_MS);
+    expect(mutationIntervalMs({ action: "click", stressed: true })).toBe(MUTATION_INTERVAL_STRESSED_MS);
+    expect(MUTATION_INTERVAL_STRESSED_MS).toBeGreaterThan(MUTATION_INTERVAL_COMMITTING_MS);
   });
 });

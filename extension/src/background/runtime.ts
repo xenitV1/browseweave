@@ -13,6 +13,7 @@ import {
   isManagedTabOwned,
   managedTabsAfterClose,
   maskUntrustedApprovalDescription,
+  mutationIntervalMs,
   normalizeManagedTabIds,
   normalizeNavigationUrl,
   normalizePagination,
@@ -243,11 +244,15 @@ const CONTENT_ACTIONS = new Set(["snapshot", "click", "click_at", "type", "fill_
 const MAX_INCOMING_MESSAGE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_SNAPSHOT_CHARS = 12_000;
 const MAX_SNAPSHOT_CACHE_ENTRIES = 6;
+const SNAPSHOT_FRAME_CONCURRENCY = 6;
 const MAX_SCREENSHOT_DATA_URL_CHARS = 12 * 1024 * 1024;
 const MAX_SCREENSHOT_CACHE_ENTRIES = 8;
 const SCREENSHOT_TTL_MS = 120_000;
 const AUTHENTICATION_TIMEOUT_MS = 10_000;
-const MIN_MUTATION_INTERVAL_MS = 750;
+/** Upper bound on any computed pacing interval, independent of its source. */
+const MAX_MUTATION_INTERVAL_MS = 5_000;
+/** How long a tab keeps the conservative pacing after a detected challenge. */
+const MUTATION_STRESS_WINDOW_MS = 60_000;
 const SESSION_STATE_STORAGE_KEY = "browseweave_session_state_v2";
 const MANAGED_TABS_SESSION_KEY = "browseweave_managed_tabs_v1";
 const LOCAL_APPROVAL_GRANTS_SESSION_KEY = "browseweave_local_approval_grants_v2";
@@ -281,6 +286,7 @@ const humanInterventions = new Map<number, HumanInterventionState>();
 const pausedOrigins = new Map<string, HumanInterventionState["kind"]>();
 const mutationQueues = new Map<number, Promise<void>>();
 const lastMutationFinishedAt = new Map<number, number>();
+const mutationStressUntil = new Map<number, number>();
 const managedTabIds = new Set<number>();
 
 const MUTATING_ACTIONS = new Set<BrowserAction>([
@@ -2454,9 +2460,20 @@ function rememberHumanIntervention(tab: browser.tabs.Tab, probe: HumanProbeResul
     detected_at: new Date().toISOString()
   };
   humanInterventions.set(intervention.tab_id, intervention);
+  // A detected challenge, 403, or 429 is the site asking for less traffic, so
+  // the tab keeps the conservative pacing even after the human resumes it.
+  mutationStressUntil.set(intervention.tab_id, Date.now() + MUTATION_STRESS_WINDOW_MS);
   if (intervention.pause_origin && origin) pausedOrigins.set(origin, intervention.kind);
   notifyHumanState();
   return intervention;
+}
+
+function tabIsStressed(tabIdValue: number): boolean {
+  const until = mutationStressUntil.get(tabIdValue);
+  if (until === undefined) return false;
+  if (until > Date.now()) return true;
+  mutationStressUntil.delete(tabIdValue);
+  return false;
 }
 
 async function safetyProbe(tab: browser.tabs.Tab): Promise<HumanProbeResult> {
@@ -2497,12 +2514,16 @@ async function guardHumanIntervention(tab: browser.tabs.Tab): Promise<void> {
   if (probe.requires_human) throw humanRequiredError(rememberHumanIntervention(tab, probe));
 }
 
-async function runSerializedMutation<T>(tabIdValue: number, operation: () => Promise<T>): Promise<T> {
+async function runSerializedMutation<T>(
+  tabIdValue: number,
+  intervalMs: number,
+  operation: () => Promise<T>
+): Promise<T> {
   const previous = mutationQueues.get(tabIdValue) ?? Promise.resolve();
   let tail: Promise<void>;
   const result = previous.catch(() => undefined).then(async () => {
     const elapsed = Date.now() - (lastMutationFinishedAt.get(tabIdValue) ?? 0);
-    const remaining = MIN_MUTATION_INTERVAL_MS - elapsed;
+    const remaining = Math.min(MAX_MUTATION_INTERVAL_MS, Math.max(0, intervalMs)) - elapsed;
     if (remaining > 0) await new Promise((resolve) => globalThis.setTimeout(resolve, remaining));
     try {
       return await operation();
@@ -2555,7 +2576,8 @@ async function executeCommandWithGuards(
   }
   const queueId = tab ? tabId(tab) : -1;
   const lockedPayload = tab && action !== "new_tab" ? { ...payload, tab_id: tabId(tab) } : payload;
-  return runSerializedMutation(queueId, async () => {
+  const interval = mutationIntervalMs({ action, key: payload.key, stressed: tabIsStressed(queueId) });
+  return runSerializedMutation(queueId, interval, async () => {
     if (tab && DOM_GUARDED_ACTIONS.has(action) && tabOrigin(tab)) await guardHumanIntervention(tab);
     // There is intentionally no automatic retry here. The caller receives the first result.
     return executeCommand(action, lockedPayload, approved, suppliedFingerprint, revalidateOnly);
@@ -2673,6 +2695,24 @@ async function rememberSnapshot(id: string, entry: SnapshotCacheEntry): Promise<
   await persistSessionState();
 }
 
+/** Runs `worker` over `items` with a bounded number in flight, preserving order. */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const runnerCount = Math.min(Math.max(1, limit), Math.max(1, items.length));
+  await Promise.all(Array.from({ length: runnerCount }, async () => {
+    for (let index = cursor++; index < items.length; index = cursor++) {
+      const item = items[index];
+      if (item !== undefined) results[index] = await worker(item);
+    }
+  }));
+  return results;
+}
+
 async function snapshot(payload: Record<string, unknown>, approved: boolean): Promise<Record<string, unknown>> {
   await ensureSessionStateLoaded();
   const tab = await targetTab(payload);
@@ -2696,25 +2736,35 @@ async function snapshot(payload: Record<string, unknown>, approved: boolean): Pr
   const outputFrames: Array<Record<string, unknown>> = [];
   const incompleteFrames: Array<Record<string, unknown>> = [];
 
-  for (const frame of frameList) {
+  // Reading frames concurrently keeps the cost of an ordinary page with many
+  // third-party iframes at the slowest frame rather than their sum. Ordering is
+  // preserved because later truncation drops the deepest frames first.
+  const frameReads = await mapWithConcurrency(frameList, SNAPSHOT_FRAME_CONCURRENCY, async (frame) => {
     try {
       const frameSnapshot = await sendContentCommand(tab, frame.frameId, "snapshot", {
         mode: options.mode,
         max_elements: options.maxElements,
         query: options.query
       }, approved);
-      outputFrames.push({
-        frame_id: frame.frameId,
-        parent_frame_id: frame.parentFrameId,
-        ...(frameSnapshot as Record<string, unknown>)
-      });
+      return { frame, snapshot: frameSnapshot as Record<string, unknown> };
     } catch (error) {
-      incompleteFrames.push({
-        frame_id: frame.frameId,
-        url: redactUrl(frame.url),
-        reason: error instanceof Error ? error.message : "The frame could not be read."
-      });
+      return { frame, error };
     }
+  });
+  for (const read of frameReads) {
+    if ("snapshot" in read) {
+      outputFrames.push({
+        frame_id: read.frame.frameId,
+        parent_frame_id: read.frame.parentFrameId,
+        ...read.snapshot
+      });
+      continue;
+    }
+    incompleteFrames.push({
+      frame_id: read.frame.frameId,
+      url: redactUrl(read.frame.url),
+      reason: read.error instanceof Error ? read.error.message : "The frame could not be read."
+    });
   }
 
   const result: Record<string, unknown> = {
@@ -3002,7 +3052,13 @@ async function completeLocalCredentialHandoff(handoffId: string, rawFields: unkn
   const fields = localCredentialValues(preview, rawFields);
   let applyPayload: Record<string, unknown> | undefined;
   try {
-    return await runSerializedMutation(preview.tab_id, async () => {
+    // A credential handoff fills and may submit a login form, so it keeps the
+    // conservative interval rather than the continuing-interaction one.
+    const interval = mutationIntervalMs({
+      action: "credential_fill",
+      stressed: tabIsStressed(preview.tab_id)
+    });
+    return await runSerializedMutation(preview.tab_id, interval, async () => {
       const tab = await targetTab({ tab_id: preview.tab_id });
       if (tabOrigin(tab)) await guardHumanIntervention(tab);
 
@@ -3450,6 +3506,7 @@ extensionBrowser.tabs.onRemoved.addListener((removedTabId) => {
   }
   mutationQueues.delete(removedTabId);
   lastMutationFinishedAt.delete(removedTabId);
+  mutationStressUntil.delete(removedTabId);
   void untrackManagedTab(removedTabId).catch(() => undefined);
   void revokeCredentialHandoffsForTab(removedTabId).catch(() => undefined);
   void invalidateApprovalTarget(removedTabId);

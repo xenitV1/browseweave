@@ -797,3 +797,109 @@ export function asFiniteInteger(value: unknown, fallback: number): number {
     ? value
     : fallback;
 }
+
+export const TYPING_TOTAL_BUDGET_MS = 1_200;
+export const TYPING_MAX_INTERVAL_MS = 24;
+export const TYPING_MAX_PACED_CHARS = 400;
+
+/**
+ * Dispatching a whole string with no interval starves debounced autocomplete,
+ * asynchronous framework state, and per-keystroke validators, so pages observe
+ * an input burst they were never written to handle. The interval spreads a
+ * bounded budget across the string; long text keeps the original zero-delay
+ * path so a large paste cannot approach the command timeout.
+ */
+export function keystrokeIntervalMs(
+  textLength: number,
+  budgetMs = TYPING_TOTAL_BUDGET_MS,
+  maxIntervalMs = TYPING_MAX_INTERVAL_MS,
+  maxPacedChars = TYPING_MAX_PACED_CHARS
+): number {
+  if (!Number.isFinite(textLength)) return 0;
+  const length = Math.trunc(textLength);
+  if (length <= 1 || length > Math.trunc(maxPacedChars)) return 0;
+  return Math.max(0, Math.min(Math.trunc(maxIntervalMs), Math.floor(Math.max(0, budgetMs) / (length - 1))));
+}
+
+export const SCROLL_MAX_STEP_PX = 360;
+export const SCROLL_MAX_STEPS = 8;
+
+/**
+ * A single jump skips every intermediate offset, so `IntersectionObserver`
+ * callbacks, infinite-scroll handlers, and virtualised rows for the traversed
+ * region never run and a later snapshot legitimately reports missing content.
+ * The returned deltas always sum to the requested distance.
+ */
+export function scrollStepDeltas(
+  delta: number,
+  maxStepPx = SCROLL_MAX_STEP_PX,
+  maxSteps = SCROLL_MAX_STEPS
+): number[] {
+  if (!Number.isFinite(delta) || delta === 0) return [];
+  const limit = Math.max(1, Math.trunc(maxStepPx));
+  const cap = Math.max(1, Math.trunc(maxSteps));
+  const steps = Math.min(cap, Math.max(1, Math.ceil(Math.abs(delta) / limit)));
+  const base = Math.trunc(delta / steps);
+  const deltas = new Array<number>(steps).fill(base);
+  deltas[steps - 1] = base + (delta - base * steps);
+  return deltas;
+}
+
+export interface PointerPoint {
+  x: number;
+  y: number;
+}
+
+export const POINTER_APPROACH_STEPS = 3;
+
+/**
+ * Hover-driven menus commonly open on movement rather than on a single
+ * `pointerover` at the target centre, so a path-free entry leaves their items
+ * absent from the next snapshot. The final point is always the exact target.
+ */
+export function pointerApproachPoints(
+  from: PointerPoint,
+  to: PointerPoint,
+  steps = POINTER_APPROACH_STEPS
+): PointerPoint[] {
+  if (![from.x, from.y, to.x, to.y].every((value) => Number.isFinite(value))) return [];
+  const count = Math.max(1, Math.trunc(steps));
+  const points: PointerPoint[] = [];
+  for (let index = 1; index <= count; index += 1) {
+    const ratio = index / count;
+    points.push({
+      x: Math.round(from.x + (to.x - from.x) * ratio),
+      y: Math.round(from.y + (to.y - from.y) * ratio)
+    });
+  }
+  return points;
+}
+
+export const MUTATION_INTERVAL_CONTINUING_MS = 120;
+export const MUTATION_INTERVAL_COMMITTING_MS = 750;
+export const MUTATION_INTERVAL_STRESSED_MS = 2_500;
+
+/** Actions that continue an interaction the caller already began on this tab. */
+const CONTINUING_INTERACTION_ACTIONS = new Set<string>(["type", "fill_form", "hover", "scroll", "press"]);
+/** Keys that commit the surrounding form rather than continue editing it. */
+const COMMITTING_KEYS = new Set<string>(["Enter", "NumpadEnter"]);
+
+/**
+ * A uniform floor is simultaneously slower than necessary inside one
+ * interaction and too eager once a site signals stress. Editing keystrokes and
+ * scrolling stay tight, anything that commits or navigates keeps the
+ * conservative interval, and a stressed tab backs off well beyond both.
+ */
+export function mutationIntervalMs(input: {
+  action: string;
+  key?: unknown;
+  stressed?: boolean;
+}): number {
+  if (input.stressed === true) return MUTATION_INTERVAL_STRESSED_MS;
+  if (input.action === "press" && typeof input.key === "string" && COMMITTING_KEYS.has(input.key)) {
+    return MUTATION_INTERVAL_COMMITTING_MS;
+  }
+  return CONTINUING_INTERACTION_ACTIONS.has(input.action)
+    ? MUTATION_INTERVAL_CONTINUING_MS
+    : MUTATION_INTERVAL_COMMITTING_MS;
+}
