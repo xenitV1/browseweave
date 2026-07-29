@@ -6,6 +6,10 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.3] - 2026-07-29
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
 ### Added
 
 - Optional local file attachment: `browser_attach_file` places one file into a page's file input without opening the operating-system file picker, which no extension can drive. It is off by default and reads only from directories listed in an owner-only `policy.json`. Hidden paths, multiple-hardlink aliases, known credential/key names, recognizable private-key content, unsupported types, oversized files, and BrowseWeave's own directories are refused; symlinks are resolved before the decision, and the open handle is re-verified so the path cannot be swapped mid-read. Every attachment requires a one-use extension-signed approval that shows the exact basename, byte size, MIME type, full SHA-256, and browser-verified site; session confirmation can never authorize a local-file upload. The absolute path never reaches the browser, the audit log stores structured file identity plus a full path hash rather than the path, and snapshots report `[ATTACHED:n]` instead of a filename.
@@ -77,6 +81,7 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.2...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.3...HEAD
+[0.1.0-beta.3]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.2...v0.1.0-beta.3
 [0.1.0-beta.2]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/xenitV1/browseweave/releases/tag/v0.1.0-beta.1
