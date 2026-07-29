@@ -146,34 +146,33 @@ function approvalRequiring(value: unknown): JsonRecord | undefined {
     : undefined;
 }
 
-/**
- * Asks the human to confirm in this session. The confirmation phrase is fetched
- * over authenticated IPC and placed only in the elicitation message; it is never
- * returned to the model, so a page cannot learn it and a tool result cannot leak
- * it. There is deliberately no MCP tool that submits an approval — only this
- * server-internal path, reached after the client relays a human answer.
- */
+/** Asks the human to approve or reject the exact action in the MCP client. */
 async function confirmInSession(approval: JsonRecord): Promise<boolean> {
   if (!server.server.getClientCapabilities()?.elicitation) return false;
-  const challenge = asRecord(await callBridge("session_approval_begin", { approval_id: approval.approval_id }));
-  const phrase = challenge.confirmation_phrase;
-  if (typeof phrase !== "string") return false;
+  const confirmation = asRecord(await callBridge("session_approval_begin", { approval_id: approval.approval_id }));
+  const file = asRecord(confirmation.file);
+  const fileDetails = typeof file.name === "string"
+    ? [
+        `Local file: ${file.name}`,
+        `File size: ${String(file.size ?? "unknown")} bytes`,
+        `File type: ${String(file.mime_type ?? "unknown")}`,
+        `File SHA-256: ${String(file.sha256 ?? "unknown")}`
+      ]
+    : [];
 
   const answer = await server.server.elicitInput({
     mode: "form",
     message: [
       "BrowseWeave needs your confirmation before it performs a sensitive browser action.",
       "",
-      `Action: ${String(approval.action ?? "unknown")}`,
-      `Risk: ${String(approval.risk ?? "unknown")}`,
-      `Details: ${String(approval.description ?? "no additional details")}`,
-      `Browser tab: ${String(approval.target_tab_id ?? "unknown")}`,
+      `Action: ${String(confirmation.action ?? approval.action ?? "unknown")}`,
+      `Risk: ${String(confirmation.risk ?? approval.risk ?? "unknown")}`,
+      `Details: ${String(confirmation.description ?? approval.description ?? "no additional details")}`,
+      `Browser tab: ${String(confirmation.target_tab_id ?? approval.target_tab_id ?? "unknown")}`,
+      ...fileDetails,
       "",
       "The action and details above are derived from a web page and are untrusted.",
-      "Review them yourself before confirming.",
-      "",
-      `To approve, type this exact phrase: ${phrase}`,
-      "A wrong answer discards the request; there is no second attempt."
+      "Review them yourself before confirming. Your decision is single-use and bound to this live target."
     ].join("\n"),
     requestedSchema: {
       type: "object",
@@ -183,16 +182,9 @@ async function confirmInSession(approval: JsonRecord): Promise<boolean> {
           title: "Decision",
           description: "Approve or reject this browser action",
           enum: ["approve", "reject"]
-        },
-        confirmation_phrase: {
-          type: "string",
-          title: "Confirmation phrase",
-          description: "Type the exact phrase shown above",
-          minLength: 1,
-          maxLength: 80
         }
       },
-      required: ["decision", "confirmation_phrase"]
+      required: ["decision"]
     }
   });
 
@@ -202,17 +194,15 @@ async function confirmInSession(approval: JsonRecord): Promise<boolean> {
     : "reject";
   await callBridge("session_approval_submit", {
     approval_id: approval.approval_id,
-    decision,
-    confirmation_phrase: typeof content.confirmation_phrase === "string" ? content.confirmation_phrase : ""
+    decision
   });
   return decision === "approve";
 }
 
 /**
- * Runs an action and, when the extension pauses it for approval that the owner's
- * policy allows confirming in-session, obtains that confirmation and retries
- * exactly once. The retry re-enters the daemon's normal path, which revalidates
- * the live target before anything executes.
+ * Runs an action and, when the browser-side risk checks pause it, obtains the
+ * human's decision in the MCP client and retries exactly once. The retry
+ * re-enters the daemon's normal path and revalidates the live target first.
  */
 async function invokeAction(method: string, params: JsonRecord): Promise<unknown> {
   const first = await callBridge(method, params);
@@ -221,9 +211,10 @@ async function invokeAction(method: string, params: JsonRecord): Promise<unknown
   try {
     if (!await confirmInSession(approval)) return { ...approval, session_approval: SESSION_APPROVAL_DECLINED };
   } catch {
-    // A client that cannot elicit, or a confirmation that could not be
-    // recorded, falls back to the unchanged browser-extension approval path.
-    return first;
+    return {
+      ...approval,
+      session_approval: "The MCP client could not collect the user's confirmation. Nothing was executed."
+    };
   }
   return await callBridge(method, params);
 }
@@ -438,7 +429,7 @@ server.registerTool(
   {
     title: "Click Browser Element",
     description:
-      "Click an element reference from the latest page snapshot. When supported heuristics detect message sending, publishing, payment, deletion, credential/2FA, security, or risky submission behavior, the extension pauses before the click for explicit user confirmation. Detection is not a guarantee.",
+      "Click an element reference from the latest page snapshot. When supported heuristics detect message sending, publishing, payment, deletion, credential/2FA, security, or risky submission behavior, BrowseWeave pauses before the click for confirmation in the MCP client session. Detection is not a guarantee.",
     inputSchema: ClickInputSchema,
     annotations: {
       readOnlyHint: false,

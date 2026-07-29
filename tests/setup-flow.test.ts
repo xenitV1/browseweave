@@ -38,13 +38,14 @@ describe("one-click local setup page", () => {
     expect(shouldReuseConnectedBrowser({ newProfile: false, legacyCopyRemoved: true })).toBe(false);
   });
 
-  it("configures MCP clients before installing the service or asking for browser consent", async () => {
+  it("installs agent skills and configures MCP clients before the service or browser consent", async () => {
     const phases: string[] = [];
     await prepareSetupBeforeBrowserConsent({
+      installSkills: async () => { phases.push("skills"); },
       configureClients: async () => { phases.push("mcp"); },
       installService: async () => { phases.push("service"); }
     });
-    expect(phases).toEqual(["mcp", "service"]);
+    expect(phases).toEqual(["skills", "mcp", "service"]);
   });
   it("keeps the short-lived secret out of the URL and serves only the exact loopback path", async () => {
     const setup = await startSetupPageServer({ browser: "chrome", extensionPath: "/tmp/BrowseWeave extension" });

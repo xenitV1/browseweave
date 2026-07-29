@@ -8,22 +8,6 @@ interface BrowserIdentityView {
   extension_version?: string;
 }
 
-interface ApprovalView {
-  approval_id: string;
-  action: string;
-  risk: string;
-  description: string;
-  expires_at: string;
-  approval_fingerprint: string;
-  target_tab_id: number;
-  target_frame_id: number;
-  target_origin: string;
-  target_site: string;
-  target_title: string;
-  destination_origin: string;
-  file?: { name: string; mime_type: string; sha256: string; size: number };
-}
-
 interface HumanInterventionView {
   tab_id?: number;
   origin?: string;
@@ -54,7 +38,6 @@ interface UiStatus {
   has_token?: boolean;
   active_tab_access?: string;
   identity?: BrowserIdentityView | null;
-  approvals?: ApprovalView[];
   human_interventions?: HumanInterventionView[];
   managed_tab_count?: number;
   managed_tab_limit?: number;
@@ -74,10 +57,7 @@ const browserLabel = document.querySelector<HTMLElement>("#browser-label");
 const installationLabel = document.querySelector<HTMLElement>("#installation-label");
 const reconnectButton = document.querySelector<HTMLButtonElement>("#reconnect");
 const optionsButton = document.querySelector<HTMLButtonElement>("#open-options");
-const approvalCount = document.querySelector<HTMLElement>("#approval-count");
-const approvalEmpty = document.querySelector<HTMLElement>("#approval-empty");
-const approvalList = document.querySelector<HTMLElement>("#approval-list");
-const approvalResult = document.querySelector<HTMLElement>("#approval-result");
+const actionResult = document.querySelector<HTMLElement>("#action-result");
 const humanCard = document.querySelector<HTMLElement>("#human-card");
 const humanMessage = document.querySelector<HTMLElement>("#human-message");
 const humanOrigin = document.querySelector<HTMLElement>("#human-origin");
@@ -116,10 +96,10 @@ function shortInstallationId(value: unknown): string {
   return `${value.slice(0, 8)}…${value.slice(-4)}`;
 }
 
-function showApprovalResult(message: string, kind: "success" | "error" | "" = ""): void {
-  if (!approvalResult) return;
-  approvalResult.textContent = message;
-  approvalResult.className = `result ${kind}`.trim();
+function showActionResult(message: string, kind: "success" | "error" | "" = ""): void {
+  if (!actionResult) return;
+  actionResult.textContent = message;
+  actionResult.className = `result ${kind}`.trim();
 }
 
 function showCredentialResult(message: string, kind: "success" | "error" | "" = ""): void {
@@ -132,102 +112,6 @@ function showRemotePermissionResult(message: string, kind: "success" | "error" |
   if (!remotePermissionResult) return;
   remotePermissionResult.textContent = message;
   remotePermissionResult.className = `result ${kind}`.trim();
-}
-
-function expiryLabel(expiresAt: string): string {
-  const date = new Date(expiresAt);
-  if (!Number.isFinite(date.getTime())) return "Expiry unavailable";
-  return `Expires ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
-}
-
-function actionButton(
-  label: string,
-  className: string,
-  approvalId: string,
-  decision: "approve" | "reject"
-): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = className;
-  button.textContent = label;
-  button.addEventListener("click", () => void decideApproval(approvalId, decision, button));
-  return button;
-}
-
-function renderApprovals(approvals: ApprovalView[]): void {
-  approvalList?.replaceChildren();
-  if (approvalCount) approvalCount.textContent = String(approvals.length);
-  if (approvalEmpty) approvalEmpty.hidden = approvals.length > 0;
-  if (!approvalList) return;
-
-  for (const approval of approvals) {
-    if (
-      typeof approval.approval_id !== "string" || approval.approval_id.length > 256 ||
-      typeof approval.expires_at !== "string" ||
-      typeof approval.target_tab_id !== "number" || !Number.isSafeInteger(approval.target_tab_id) || approval.target_tab_id <= 0 ||
-      typeof approval.target_frame_id !== "number" || !Number.isSafeInteger(approval.target_frame_id) || approval.target_frame_id < 0 ||
-      typeof approval.target_site !== "string"
-    ) continue;
-    const article = document.createElement("article");
-    article.className = "approval-card";
-
-    const heading = document.createElement("div");
-    heading.className = "approval-card-heading";
-    const title = document.createElement("strong");
-    title.textContent = readableLabel(approval.action, "Sensitive action");
-    const risk = document.createElement("span");
-    risk.className = "risk-label";
-    risk.textContent = readableLabel(approval.risk, "Approval required");
-    heading.append(title, risk);
-
-    const trustedTarget = document.createElement("p");
-    trustedTarget.className = "trusted-target";
-    trustedTarget.textContent = `Browser-verified target · ${normalizeText(approval.target_site, 180)} · ` +
-      `tab ${approval.target_tab_id}, frame ${approval.target_frame_id}`;
-    const trustedTitle = document.createElement("p");
-    trustedTitle.className = "trusted-target-title";
-    trustedTitle.textContent = `Untrusted page title · ${maskUntrustedApprovalDescription(
-      normalizeText(approval.target_title, 120) || "Untitled tab",
-      140
-    )}`;
-    const trustedDestination = document.createElement("p");
-    trustedDestination.className = "trusted-destination";
-    trustedDestination.hidden = typeof approval.destination_origin !== "string" || !approval.destination_origin;
-    trustedDestination.textContent = trustedDestination.hidden
-      ? ""
-      : `Browser-verified current pre-action destination · ${normalizeText(approval.destination_origin, 180)}`;
-
-    const warning = document.createElement("p");
-    warning.className = "untrusted-label";
-    warning.textContent = "Untrusted page summary · likely secrets masked";
-    const description = document.createElement("p");
-    description.className = "approval-description";
-    description.textContent = maskUntrustedApprovalDescription(approval.description);
-    const fileIdentity = document.createElement("p");
-    fileIdentity.className = "trusted-file";
-    const validFile = approval.file &&
-      typeof approval.file.name === "string" && typeof approval.file.mime_type === "string" &&
-      typeof approval.file.sha256 === "string" && /^[a-f0-9]{64}$/u.test(approval.file.sha256) &&
-      typeof approval.file.size === "number" && Number.isSafeInteger(approval.file.size) && approval.file.size >= 0;
-    fileIdentity.hidden = !validFile;
-    fileIdentity.textContent = validFile
-      ? `Local file leaving this computer · ${normalizeText(approval.file?.name, 255)} · ` +
-        `${approval.file?.size} bytes · ${normalizeText(approval.file?.mime_type, 192)} · ` +
-        `SHA-256 ${approval.file?.sha256}`
-      : "";
-    const expiry = document.createElement("p");
-    expiry.className = "expiry";
-    expiry.textContent = expiryLabel(approval.expires_at);
-
-    const controls = document.createElement("div");
-    controls.className = "approval-actions";
-    controls.append(
-      actionButton("Approve once", "primary", approval.approval_id, "approve"),
-      actionButton("Reject", "danger", approval.approval_id, "reject")
-    );
-    article.append(heading, trustedTarget, trustedDestination, trustedTitle, fileIdentity, warning, description, expiry, controls);
-    approvalList.append(article);
-  }
 }
 
 function renderHumanIntervention(interventions: HumanInterventionView[]): void {
@@ -364,7 +248,6 @@ function render(status: UiStatus): void {
         : `${managedCount} open tab${managedCount === 1 ? " is" : "s are"} owned by BrowseWeave in this browser session.`;
   }
   if (cleanupManagedTabsButton) cleanupManagedTabsButton.disabled = managedCount === 0 || Boolean(status.managed_tabs_error);
-  renderApprovals(Array.isArray(status.approvals) ? status.approvals : []);
   renderHumanIntervention(Array.isArray(status.human_interventions) ? status.human_interventions : []);
   renderCredentialHandoff(Array.isArray(status.credential_handoffs) ? status.credential_handoffs : []);
   currentActiveTabId = typeof status.active_tab_id === "number" && Number.isSafeInteger(status.active_tab_id) && status.active_tab_id > 0
@@ -386,29 +269,6 @@ async function refresh(): Promise<void> {
   }
 }
 
-async function decideApproval(
-  approvalId: string,
-  decision: "approve" | "reject",
-  clickedButton: HTMLButtonElement
-): Promise<void> {
-  const card = clickedButton.closest<HTMLElement>(".approval-card");
-  const buttons = [...(card?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
-  for (const button of buttons) button.disabled = true;
-  showApprovalResult("");
-  try {
-    await browser.runtime.sendMessage({
-      kind: "ui:decide-approval",
-      approval_id: approvalId,
-      decision
-    });
-    showApprovalResult(decision === "approve" ? "Approved once and signed by this browser." : "Approval rejected.", "success");
-    await refresh();
-  } catch (error) {
-    showApprovalResult(error instanceof Error ? error.message : "The approval decision could not be sent.", "error");
-    for (const button of buttons) button.disabled = false;
-  }
-}
-
 reconnectButton?.addEventListener("click", async () => {
   reconnectButton.disabled = true;
   try {
@@ -422,13 +282,13 @@ reconnectButton?.addEventListener("click", async () => {
 
 resumeHumanButton?.addEventListener("click", async () => {
   resumeHumanButton.disabled = true;
-  showApprovalResult("");
+  showActionResult("");
   try {
     await browser.runtime.sendMessage({ kind: "ui:resume-human" });
-    showApprovalResult("The page is clear. BrowseWeave can continue.", "success");
+    showActionResult("The page is clear. BrowseWeave can continue.", "success");
     await refresh();
   } catch (error) {
-    showApprovalResult(error instanceof Error ? error.message : "The browser step is still waiting for you.", "error");
+    showActionResult(error instanceof Error ? error.message : "The browser step is still waiting for you.", "error");
   } finally {
     resumeHumanButton.disabled = false;
   }
@@ -439,17 +299,17 @@ cleanupManagedTabsButton?.addEventListener("click", async () => {
   if (count < 1) return;
   if (!globalThis.confirm(`Close ${count} tab${count === 1 ? "" : "s"} created by BrowseWeave? Your other tabs will stay open.`)) return;
   cleanupManagedTabsButton.disabled = true;
-  showApprovalResult("");
+  showActionResult("");
   try {
     const result = await browser.runtime.sendMessage({ kind: "ui:cleanup-managed-tabs" }) as {
       closed_tab_ids?: number[];
       managed_tab_count?: number;
     };
     const closed = Array.isArray(result?.closed_tab_ids) ? result.closed_tab_ids.length : 0;
-    showApprovalResult(`${closed} managed tab${closed === 1 ? "" : "s"} closed.`, "success");
+    showActionResult(`${closed} managed tab${closed === 1 ? "" : "s"} closed.`, "success");
     await refresh();
   } catch (error) {
-    showApprovalResult(error instanceof Error ? error.message : "Managed tabs could not be closed.", "error");
+    showActionResult(error instanceof Error ? error.message : "Managed tabs could not be closed.", "error");
     cleanupManagedTabsButton.disabled = false;
   }
 });
@@ -565,7 +425,7 @@ browser.runtime.onMessage.addListener((message: unknown) => {
   if (message && typeof message === "object") {
     const kind = (message as Record<string, unknown>).kind;
     if (
-      kind === "bridge:state" || kind === "bridge:approvals" || kind === "bridge:human-state" ||
+      kind === "bridge:state" || kind === "bridge:human-state" ||
       kind === "bridge:managed-tabs" || kind === "bridge:credentials"
     ) void refresh();
   }

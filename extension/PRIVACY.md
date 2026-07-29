@@ -9,7 +9,7 @@ The extension-to-daemon connection is local, but MCP results do not necessarily 
 - The extension connects only to `ws://127.0.0.1:32110` on the same computer.
 - After the user selects **Connect BrowseWeave**, the browser may open the locally registered `io.browseweave.setup` native helper over browser-owned standard input/output. The helper exchanges only bounded setup metadata with the local daemon and does not receive page text, screenshots, form values, or browsing history.
 - Initial guided enrollment uses the installer's private short-lived loopback page and its **Connect this browser** button. **Connect BrowseWeave** in Settings is a separate later native reconnect action.
-- Normal page reading or interaction happens in response to an authenticated local command. Limited browser metadata and extension state are also processed for connection health, setup, approvals, and managed-tab cleanup.
+- Normal page reading or interaction happens in response to an authenticated local command. Limited browser metadata and extension state are also processed for connection health, setup, session-decision replay protection, and managed-tab cleanup.
 - Page data returned through MCP may be processed by the user's chosen AI client and model provider under their own privacy terms.
 
 ## Data that may be processed
@@ -25,7 +25,7 @@ Password, one-time-code, and payment-card values are masked in snapshots. URL fr
 
 ## Local state
 
-The extension stores a random installation ID, pairing state, and a non-exportable signing key in browser-managed local storage/IndexedDB. The settings page has no field that displays or accepts the pairing credential.
+The extension stores a random installation ID, pairing state, and a non-exportable signing key for authenticated pairing and transport identity in browser-managed local storage/IndexedDB. The settings page has no field that displays or accepts the pairing credential.
 
 During native or guided setup, the extension receives short-lived random setup material and expiry/binding metadata only after the user's trusted connection action. It contains no browsing data or credentials. BrowseWeave does not copy that material into a normal page, URL, clipboard, command output, MCP configuration, or model context; it is invalidated after use or expiry.
 
@@ -34,7 +34,7 @@ Browser session storage may contain:
 - up to six bounded filtered snapshots, including returned page text, links, and controls, for delta reads;
 - up to eight screenshot-binding metadata records for at most two minutes, without screenshot image bytes;
 - up to 10 managed-tab IDs;
-- bounded short-lived approval/grant and human-intervention metadata; and
+- bounded short-lived session-decision replay and human-intervention metadata; and
 - local credential-handoff origin, ref, expiry, and binding metadata for at most five minutes, without credential values.
 
 This state is cleared with the browser session/extension lifecycle, subject to browser implementation. If the user explicitly enables remote credential fallback, extension-local storage contains only a one-use permission ID, exact HTTPS origin, and creation/expiry timestamps for at most 24 hours. It contains no username or password and is removed when consumed, revoked, or expired.
@@ -47,4 +47,4 @@ Broad host access, tabs, navigation, storage, Chromium scripting, and native-mes
 
 Private/incognito access is disabled by default. Browser UI, privileged pages, extension stores, file pickers, operating-system dialogs, CAPTCHA, WebAuthn, and hardware security-key prompts remain outside automated control.
 
-File attachment, payments, deletion, credentials, two-factor codes, account-security changes, and coordinate clicks require a signed decision from the extension's own approval UI. If the owner separately enables the weaker session-confirmation feature in both policy and Settings, only form submissions, message/publish actions, and off-site navigation may instead be confirmed in the AI client. No MCP command can manufacture an extension-signed decision.
+When a sensitive action is detected, confirmation is collected by the MCP client rather than the extension. The extension has no approve/reject UI. The resulting decision is single-use and the live browser target is revalidated before execution. Pairing, credential handoff, remote credential permission, CAPTCHA, WebAuthn, and browser/operating-system prompts remain separate trusted user interactions.

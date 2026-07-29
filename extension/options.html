@@ -50,19 +50,6 @@
         <p id="permission-result" class="result" role="status" aria-live="polite"></p>
       </section>
 
-      <section class="explanation" aria-labelledby="session-approval-title">
-        <h2 id="session-approval-title">Confirm approvals in the AI session</h2>
-        <p class="card-copy">Off by default. When on, form submissions, message or publish actions, and navigation away from the current site may be confirmed by you in the AI client instead of here. You type a phrase this computer generates; a wrong phrase discards the request.</p>
-        <p class="card-copy">This is weaker than approving here, because it trusts your AI client to pass on what you actually typed. Payments, deletion, passwords, two-factor codes, account-security changes, and coordinate clicks always stay on this page. Your local BrowseWeave policy file must allow it too.</p>
-        <p class="toggle-row">
-          <label for="session-approval-toggle">
-            <input type="checkbox" id="session-approval-toggle">
-            Allow session-confirmed approvals
-          </label>
-        </p>
-        <p id="session-approval-result" class="result" role="status" aria-live="polite"></p>
-      </section>
-
       <section class="explanation">
         <h2>Safety boundaries</h2>
         <ul>
@@ -70,7 +57,7 @@
           <li>Only the registered BrowseWeave helper can start local setup; websites and content scripts cannot call it.</li>
           <li>Ordinary AI commands cannot fill password, one-time-code, or payment-card fields.</li>
           <li>Local credential handoff values stay inside the extension; optional remote mode is exact-origin, one-use, and user-granted.</li>
-          <li>Sensitive actions wait for an approval signed by this browser profile.</li>
+          <li>Sensitive actions wait for your confirmation in the connected AI client session.</li>
           <li>CAPTCHA, passkey, security-key, 403, and 429 screens require direct user action.</li>
         </ul>
       </section>

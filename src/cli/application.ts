@@ -75,6 +75,7 @@ import { discoverLocalChromiumExtensionOrigins } from "../setup/chromium-extensi
 import { configureZenFlatpakNativeMessaging } from "../setup/zen-flatpak.js";
 import { purgeOwnedApplicationDirectories } from "../native/purge-data.js";
 import { browserLaunchEnvironment } from "../setup/browser-environment.js";
+import { installBundledAgentSkills } from "../setup/skill-install.js";
 
 const MAX_CAPTURE_BYTES = 2 * 1024 * 1024;
 const CLIENTS = new Set<SupportedMcpClient>(["codex", "claude-code", "cursor", "opencode", "generic"]);
@@ -1100,8 +1101,20 @@ async function uninstallNativeHost(): Promise<void> {
 }
 
 async function localInstall(): Promise<void> {
+  await installAgentSkills();
   await installService();
   await installNativeHost();
+}
+
+async function installAgentSkills(): Promise<void> {
+  const installed = await installBundledAgentSkills({
+    packageRoot: PACKAGE_ROOT,
+    home: assertManagedSetupEnvironment(),
+    version: APP_VERSION
+  });
+  for (const skill of installed) {
+    process.stdout.write(`BrowseWeave skill for ${skill.client}: ${skill.status} (${skill.path}).\n`);
+  }
 }
 
 async function localUninstall(purgeData = false): Promise<void> {
@@ -1631,6 +1644,7 @@ async function runSetup(options: SetupOptions, originalArgs: string[]): Promise<
   }
 
   await prepareSetupBeforeBrowserConsent({
+    installSkills: installAgentSkills,
     configureClients: async () => configureSetupClients(setupClients, setupOpenCodeVersion),
     installService
   });
@@ -1738,6 +1752,7 @@ export async function main(): Promise<void> {
     const client = parseClient(arg);
     const version = client === "opencode" ? openCodeVersionFlag(rest, false) : undefined;
     if (client !== "opencode" && rest.length > 0) throw new Error(`Unexpected option: ${rest[0]}`);
+    if (client !== "generic") await installAgentSkills();
     await addMcpClient(client, version);
     return;
   }

@@ -25,7 +25,6 @@ import {
   PROTOCOL_VERSION,
   SETUP_ID_PATTERN,
   SETUP_VERSION,
-  approvalDecisionSigningPayload,
   canonicalPublicJwk,
   extensionClientProofPayload,
   extensionServerProofPayload,
@@ -36,7 +35,6 @@ import {
   isBrowserAction,
   isJsonObject,
   setupPairingClientProofPayload,
-  type ApprovalDecision,
   type ApprovalSource,
   type ApprovalRequiredResult,
   type BridgeStatus,
@@ -44,7 +42,6 @@ import {
   type BrowserFamily,
   type BrowserIdentity,
   type ConnectedBrowserSummary,
-  type ExtensionApprovalRequest,
   type ExtensionCommand,
   type ExtensionError,
   type ExtensionResult,
@@ -103,13 +100,6 @@ import {
   type AttachableFile,
   type FileAttachPolicy
 } from "./file-attach.js";
-import {
-  DISABLED_SESSION_APPROVAL_POLICY,
-  createSessionChallenge,
-  loadSessionApprovalPolicy,
-  sessionChallengeMatches,
-  type SessionApprovalPolicy
-} from "./session-approval.js";
 
 // The npm surface is `dist/src/daemon.js`, which re-exports this file. Keep
 // these names exported from here so the published entrypoint does not change.
@@ -147,14 +137,12 @@ type ApprovalState = "pending" | "approved";
 
 interface PendingApproval {
   approvalId: string;
-  approvalNonce: string;
   browserId: string;
   targetTabId: number;
   targetFrameId: number;
   action: BrowserAction;
   params: JsonObject;
   canonicalParams: string;
-  paramsSha256: string;
   approvalFingerprint: string;
   risk: string;
   description: string;
@@ -162,9 +150,7 @@ interface PendingApproval {
   expiresAtIso: string;
   state: ApprovalState;
   timer: ReturnType<typeof setTimeout>;
-  /** Present only when the owner's policy allows confirming this risk in-session. */
-  sessionChallenge?: string;
-  /** A wrong phrase destroys the approval, so only one attempt is ever possible. */
+  /** Only one session decision is accepted for a pending action. */
   sessionAttempted?: boolean;
   /** Which authority approved it; drives what the extension requires to execute. */
   approvalSource?: ApprovalSource;
@@ -369,7 +355,6 @@ export class BrowseWeaveDaemon {
   readonly #browserIdByInstallation = new Map<string, string>();
   readonly #pendingCommands = new Map<string, PendingCommand>();
   readonly #pendingApprovals = new Map<string, PendingApproval>();
-  #sessionPolicy: SessionApprovalPolicy = DISABLED_SESSION_APPROVAL_POLICY;
   #fileAttachPolicy: FileAttachPolicy = DISABLED_FILE_ATTACH_POLICY;
   #setupPairingSession: SetupPairingSession | undefined;
   #legacyPairingSession: LegacyPairingSession | undefined;
@@ -396,9 +381,6 @@ export class BrowseWeaveDaemon {
     await ensurePrivateDirectory(this.#config.configDir);
     await ensurePrivateDirectory(this.#config.stateDir);
     await this.#keyRegistry.load();
-    // Read once at startup so a policy change is a deliberate restart rather
-    // than something that can take effect mid-session.
-    this.#sessionPolicy = await loadSessionApprovalPolicy(this.#config.configDir);
     this.#fileAttachPolicy = await loadFileAttachPolicy(this.#config.configDir);
     this.#startedAt = Date.now();
     try {
@@ -1162,10 +1144,6 @@ export class BrowseWeaveDaemon {
       delete session.awaitingPongTimestamp;
       return;
     }
-    if (message.type === "approval_decision") {
-      await this.#handleApprovalDecision(session, message);
-      return;
-    }
     const result = parseExtensionResult(message);
     if (result === undefined) {
       session.socket.close(1007, "invalid extension message");
@@ -1437,8 +1415,7 @@ export class BrowseWeaveDaemon {
       false,
       undefined,
       approvedGrant !== undefined,
-      approvedGrant?.approvalId,
-      approvedGrant?.approvalSource
+      approvedGrant?.approvalId
     );
   }
 
@@ -1719,7 +1696,7 @@ export class BrowseWeaveDaemon {
         approved: true,
         approval_id: approvedGrantId,
         approval_fingerprint: approvalFingerprint,
-        approval_source: approvalSource ?? "extension_signed"
+        approval_source: approvalSource ?? "session"
       };
     } else {
       command = {
@@ -1831,7 +1808,6 @@ export class BrowseWeaveDaemon {
     this.#pendingCommands.delete(result.id);
     const duration = Date.now() - pending.startedAt;
     if (pending.approvedGrantId !== undefined) {
-      this.#sendApprovalResolved(session, pending.approvedGrantId, "consumed");
       this.#audit.record({ event: "approval", action: pending.action, outcome: "consumed" });
     }
 
@@ -2010,7 +1986,6 @@ export class BrowseWeaveDaemon {
     if (pending.revalidatingApprovalId === undefined) return;
     const approval = this.#takeApproval(pending.revalidatingApprovalId);
     if (approval === undefined) return;
-    this.#sendApprovalResolved(session, approval.approvalId, "cancelled");
     this.#audit.record({ event: "approval", action: approval.action, outcome });
   }
 
@@ -2020,7 +1995,6 @@ export class BrowseWeaveDaemon {
     action: BrowserAction,
     outcome: string
   ): void {
-    this.#sendApprovalResolved(session, approvalId, "cancelled");
     this.#audit.record({ event: "approval", action, outcome });
   }
 
@@ -2057,14 +2031,12 @@ export class BrowseWeaveDaemon {
     const canonicalParams = canonicalJson(pending.params);
     const approval: PendingApproval = {
       approvalId,
-      approvalNonce: randomBase64Url(),
       browserId: session.browserId,
       targetTabId: error.target_tab_id,
       targetFrameId: error.target_frame_id,
       action: pending.action,
       params: pending.params,
       canonicalParams,
-      paramsSha256: sha256(canonicalParams),
       approvalFingerprint: fingerprint,
       risk: error.category?.slice(0, 100) || "sensitive_action",
       description: approvalDescription(error),
@@ -2073,34 +2045,8 @@ export class BrowseWeaveDaemon {
       state: "pending",
       timer: setTimeout(() => this.#expireApproval(approvalId), this.#config.approvalTtlMs)
     };
-    if (this.#sessionPolicy.enabled && this.#sessionPolicy.risks.has(approval.risk)) {
-      approval.sessionChallenge = createSessionChallenge();
-    }
     approval.timer.unref();
     this.#pendingApprovals.set(approvalId, approval);
-
-    const request: ExtensionApprovalRequest = {
-      type: "approval_request",
-      approval_id: approvalId,
-      approval_nonce: approval.approvalNonce,
-      browser_id: session.browserId,
-      target_tab_id: approval.targetTabId,
-      target_frame_id: approval.targetFrameId,
-      action: approval.action,
-      risk: approval.risk,
-      description: approval.description,
-      params_sha256: approval.paramsSha256,
-      approval_fingerprint: approval.approvalFingerprint,
-      expires_at: approval.expiresAtIso,
-      ...(attachedFileFacts(approval.params) ?? {})
-    };
-    try {
-      session.socket.send(JSON.stringify(request));
-    } catch {
-      this.#takeApproval(approvalId);
-      this.#writeFailure(pending.client, pending.requestId, "The approval request could not be sent to the browser extension.");
-      return;
-    }
     this.#writeApprovalRequired(pending.client, pending.requestId, approval);
     this.#audit.record({ event: "command", action: pending.action, outcome: "approval_required", code: "approval_required" });
   }
@@ -2109,7 +2055,7 @@ export class BrowseWeaveDaemon {
     const result: ApprovalRequiredResult = {
       approval_required: true,
       approval_id: approval.approvalId,
-      approval_ui: "browser_extension",
+      approval_ui: "mcp_session",
       browser_id: approval.browserId,
       target_tab_id: approval.targetTabId,
       target_frame_id: approval.targetFrameId,
@@ -2117,10 +2063,8 @@ export class BrowseWeaveDaemon {
       description: approval.description,
       action: approval.action,
       expires_at: approval.expiresAtIso,
-      message: approval.sessionChallenge === undefined
-        ? "Approve or reject this operation in the target browser extension, then retry the same action."
-        : "Confirm this operation with the user in this session, or approve it in the target browser extension, then retry the same action.",
-      session_approval_available: approval.sessionChallenge !== undefined
+      message: "Confirm or reject this operation with the user in the MCP client session, then retry the same action.",
+      session_approval_available: true
     };
     this.#writeSuccess(client, requestId, result);
   }
@@ -2189,16 +2133,11 @@ export class BrowseWeaveDaemon {
       false,
       undefined,
       approvedGrant !== undefined,
-      approvedGrant?.approvalId,
-      approvedGrant?.approvalSource
+      approvedGrant?.approvalId
     );
   }
 
-  /**
-   * Issues the confirmation phrase to the MCP server over authenticated IPC.
-   * The phrase is never written to a tool result or the audit log, so a page
-   * cannot learn it and replay a confirmation the human never gave.
-   */
+  /** Returns the exact pending action details for a client-session decision. */
   #handleSessionApprovalBegin(socket: Socket, requestId: string, params: JsonObject): void {
     if (!hasExactFields(params, new Set(["approval_id"])) || typeof params.approval_id !== "string") {
       this.#writeFailure(socket, requestId, "The session-approval request is invalid.");
@@ -2209,8 +2148,8 @@ export class BrowseWeaveDaemon {
       this.#writeFailure(socket, requestId, "That approval is unknown, already resolved, or expired.");
       return;
     }
-    if (approval.state !== "pending" || approval.sessionChallenge === undefined) {
-      this.#writeFailure(socket, requestId, "This action cannot be confirmed in the session. Approve it in the browser extension.");
+    if (approval.state !== "pending" || approval.sessionAttempted === true) {
+      this.#writeFailure(socket, requestId, "This action can no longer be confirmed in the session.");
       return;
     }
     this.#writeSuccess(socket, requestId, {
@@ -2222,18 +2161,13 @@ export class BrowseWeaveDaemon {
       target_tab_id: approval.targetTabId,
       target_frame_id: approval.targetFrameId,
       expires_at: approval.expiresAtIso,
-      confirmation_phrase: approval.sessionChallenge,
       ...(attachedFileFacts(approval.params) ?? {})
     });
   }
 
-  /**
-   * Accepts one human decision relayed from the MCP client. A wrong phrase
-   * destroys the approval instead of allowing another attempt, so the phrase
-   * cannot be ground down within its lifetime.
-   */
+  /** Accepts one human decision relayed from the MCP client. */
   #handleSessionApprovalSubmit(socket: Socket, requestId: string, params: JsonObject): void {
-    const fields = new Set(["approval_id", "decision", "confirmation_phrase"]);
+    const fields = new Set(["approval_id", "decision"]);
     if (
       !hasExactFields(params, fields) ||
       typeof params.approval_id !== "string" ||
@@ -2247,21 +2181,11 @@ export class BrowseWeaveDaemon {
       this.#writeFailure(socket, requestId, "That approval is unknown, already resolved, or expired.");
       return;
     }
-    if (approval.state !== "pending" || approval.sessionChallenge === undefined || approval.sessionAttempted === true) {
+    if (approval.state !== "pending" || approval.sessionAttempted === true) {
       this.#writeFailure(socket, requestId, "This approval can no longer be confirmed in the session.");
       return;
     }
     approval.sessionAttempted = true;
-    if (!sessionChallengeMatches(approval.sessionChallenge, params.confirmation_phrase)) {
-      this.#takeApproval(approval.approvalId);
-      this.#audit.record({ event: "approval", action: approval.action, outcome: "session_phrase_mismatch" });
-      this.#writeFailure(
-        socket,
-        requestId,
-        "The confirmation phrase did not match. The approval was discarded; request the action again to get a new one."
-      );
-      return;
-    }
     if (params.decision === "reject") {
       this.#takeApproval(approval.approvalId);
       this.#audit.record({ event: "approval", action: approval.action, outcome: "session_rejected" });
@@ -2274,78 +2198,9 @@ export class BrowseWeaveDaemon {
     this.#writeSuccess(socket, requestId, { approval_id: approval.approvalId, decision: "approve" });
   }
 
-  async #handleApprovalDecision(session: BrowserSession, message: JsonObject): Promise<void> {
-    if (
-      typeof message.approval_id !== "string" ||
-      (message.decision !== "approve" && message.decision !== "reject") ||
-      typeof message.signature !== "string"
-    ) {
-      session.socket.close(1007, "invalid approval decision");
-      return;
-    }
-    const approval = this.#pendingApprovals.get(message.approval_id);
-    if (approval === undefined || approval.browserId !== session.browserId) {
-      this.#audit.record({ event: "approval", outcome: "decision_replayed_or_unknown" });
-      return;
-    }
-    if (approval.expiresAt <= Date.now()) {
-      this.#expireApproval(approval.approvalId);
-      return;
-    }
-    if (approval.state !== "pending") {
-      this.#audit.record({ event: "approval", action: approval.action, outcome: "decision_replayed" });
-      return;
-    }
-
-    const decision = message.decision as ApprovalDecision;
-    const payload = approvalDecisionSigningPayload({
-      daemonInstanceId: this.#daemonInstanceId,
-      approvalId: approval.approvalId,
-      approvalNonce: approval.approvalNonce,
-      browserId: approval.browserId,
-      targetTabId: approval.targetTabId,
-      targetFrameId: approval.targetFrameId,
-      decision,
-      action: approval.action,
-      paramsSha256: approval.paramsSha256,
-      approvalFingerprint: approval.approvalFingerprint,
-      expiresAt: approval.expiresAtIso
-    });
-    if (!verifyP256(session.keyObject, payload, message.signature)) {
-      this.#audit.record({ event: "approval", action: approval.action, outcome: "signature_rejected" });
-      session.socket.close(1008, SAFE_CLOSE_REASON);
-      return;
-    }
-
-    if (decision === "reject") {
-      this.#takeApproval(approval.approvalId);
-      this.#sendApprovalResolved(session, approval.approvalId, "rejected");
-      this.#audit.record({ event: "approval", action: approval.action, outcome: "rejected" });
-      return;
-    }
-    approval.state = "approved";
-    this.#sendApprovalResolved(session, approval.approvalId, "approved");
-    this.#audit.record({ event: "approval", action: approval.action, outcome: "approved" });
-  }
-
-  #sendApprovalResolved(
-    session: BrowserSession,
-    approvalId: string,
-    outcome: "approved" | "rejected" | "consumed" | "cancelled" | "expired"
-  ): void {
-    if (session.socket.readyState !== WebSocket.OPEN) return;
-    try {
-      session.socket.send(JSON.stringify({ type: "approval_resolved", approval_id: approvalId, outcome }));
-    } catch {
-      // Resolution messages are advisory; the daemon remains authoritative.
-    }
-  }
-
   #expireApproval(approvalId: string): void {
     const approval = this.#takeApproval(approvalId);
     if (approval === undefined) return;
-    const session = this.#browserSessions.get(approval.browserId);
-    if (session !== undefined) this.#sendApprovalResolved(session, approvalId, "expired");
     this.#audit.record({ event: "approval", action: approval.action, outcome: "expired" });
   }
 

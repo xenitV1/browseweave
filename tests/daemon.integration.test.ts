@@ -29,7 +29,6 @@ import { callBridge } from "../src/bridge/ipc-client.js";
 import {
   PROTOCOL_VERSION,
   SETUP_VERSION,
-  approvalDecisionSigningPayload,
   canonicalJson,
   canonicalPublicJwk,
   extensionClientProofPayload,
@@ -44,8 +43,7 @@ import {
   type IpcResponse,
   type JsonObject,
   type P256PublicJwk,
-  type SetupPairingResponse,
-  SESSION_CHALLENGE_PATTERN
+  type SetupPairingResponse
 } from "../src/core/protocol.js";
 
 const TOKEN = "a".repeat(64);
@@ -809,38 +807,6 @@ function commandFailure(
       details: { targets: [{ target: label }] }
     }
   });
-}
-
-function signDecision(
-  extension: ExtensionClient,
-  approvalRequest: JsonObject,
-  decision: "approve" | "reject",
-  overrides: Partial<{
-    approvalId: string;
-    approvalNonce: string;
-    browserId: string;
-    targetTabId: number;
-    targetFrameId: number;
-    paramsSha256: string;
-    approvalFingerprint: string;
-    expiresAt: string;
-  }> = {},
-  privateKey = extension.signing.privateKey
-): string {
-  const payload = approvalDecisionSigningPayload({
-    daemonInstanceId: extension.daemonInstanceId,
-    approvalId: overrides.approvalId ?? String(approvalRequest.approval_id),
-    approvalNonce: overrides.approvalNonce ?? String(approvalRequest.approval_nonce),
-    browserId: overrides.browserId ?? String(approvalRequest.browser_id),
-    targetTabId: overrides.targetTabId ?? Number(approvalRequest.target_tab_id),
-    targetFrameId: overrides.targetFrameId ?? Number(approvalRequest.target_frame_id),
-    decision,
-    action: approvalRequest.action as "click",
-    paramsSha256: overrides.paramsSha256 ?? String(approvalRequest.params_sha256),
-    approvalFingerprint: overrides.approvalFingerprint ?? String(approvalRequest.approval_fingerprint),
-    expiresAt: overrides.expiresAt ?? String(approvalRequest.expires_at)
-  });
-  return signature(privateKey, payload);
 }
 
 afterEach(async () => {
@@ -1870,15 +1836,19 @@ describe("BrowseWeave daemon integration", () => {
     expect(audit).not.toContain(SECRET_TEXT);
   });
 
-  async function startSessionApprovalHarness(risks = ["form_submit"]): Promise<Harness> {
-    const root = await mkdtemp(path.join(tmpdir(), "browseweave-daemon-"));
-    await mkdir(path.join(root, "config"), { recursive: true, mode: 0o700 });
-    await writeFile(
-      path.join(root, "config", "policy.json"),
-      JSON.stringify({ session_approval: { enabled: true, risks } }),
-      { mode: 0o600 }
-    );
-    return startHarness({}, root);
+  async function approvePendingInSession(harness: Harness, response: Record<string, unknown>): Promise<string> {
+    const result = isJsonObjectForTest(response.result) ? response.result : {};
+    const approvalId = typeof result.approval_id === "string" ? result.approval_id : "";
+    expect(approvalId).not.toBe("");
+    expect(await ipcCall(harness, "session_approval_begin", { approval_id: approvalId })).toMatchObject({
+      ok: true,
+      result: { approval_id: approvalId }
+    });
+    expect(await ipcCall(harness, "session_approval_submit", {
+      approval_id: approvalId,
+      decision: "approve"
+    })).toMatchObject({ ok: true, result: { approval_id: approvalId, decision: "approve" } });
+    return approvalId;
   }
 
   it("reads an allowed local file, pauses it for approval, and binds the approval to the exact bytes", async () => {
@@ -1889,7 +1859,6 @@ describe("BrowseWeave daemon integration", () => {
     await writeFile(
       path.join(root, "config", "policy.json"),
       JSON.stringify({
-        session_approval: { enabled: true, risks: ["form_submit"] },
         file_attach: { enabled: true, allowed_directories: [documents] }
       }),
       { mode: 0o600 }
@@ -1914,44 +1883,19 @@ describe("BrowseWeave daemon integration", () => {
     expect(Buffer.from(String(file.base64), "base64").toString("utf8")).toBe("quarterly numbers");
 
     extension.socket.send(commandFailure(command, FINGERPRINT_A, UNTRUSTED_LABEL, "file_attach"));
-    const approvalRequest = await extension.next("approval_request");
-    expect(approvalRequest.file).toMatchObject({ name: "report.txt", size: 17 });
-    expect(String((approvalRequest.file as Record<string, unknown>).sha256)).toMatch(/^[a-f0-9]{64}$/u);
-    expect(await call).toMatchObject({
+    const approvalRequired = await call;
+    expect(approvalRequired).toMatchObject({
       ok: true,
-      result: { approval_required: true, session_approval_available: false }
+      result: { approval_required: true, approval_ui: "mcp_session", session_approval_available: true }
     });
+    await approvePendingInSession(harness, approvalRequired as Record<string, unknown>);
 
-    const begin = await ipcCall(harness, "session_approval_begin", {
-      approval_id: approvalRequest.approval_id as string
-    });
-    expect(begin).toMatchObject({ ok: false });
-
-    extension.socket.send(JSON.stringify({
-      type: "approval_decision",
-      approval_id: approvalRequest.approval_id,
-      decision: "approve",
-      signature: signDecision(extension, approvalRequest, "approve")
-    }));
-    expect(await extension.next("approval_resolved")).toMatchObject({ outcome: "approved" });
-
-    // Changing the file must not be able to ride the approval given for the
-    // bytes the human actually confirmed.
-    await writeFile(attachment, "different numbers");
-    const tampered = ipcCall(harness, "attach_file", params);
-    const tamperedCommand = await extension.next("command");
-    expect(tamperedCommand.approved).toBe(false);
-    extension.socket.send(commandFailure(tamperedCommand, FINGERPRINT_B, UNTRUSTED_LABEL, "file_attach"));
-    await extension.next("approval_request");
-    expect(await tampered).toMatchObject({ ok: true, result: { approval_required: true } });
-
-    await writeFile(attachment, "quarterly numbers");
     const retry = ipcCall(harness, "attach_file", params);
     const liveCheck = await extension.next("command");
     expect(liveCheck).toMatchObject({ approved: false, revalidate_only: true });
     extension.socket.send(commandFailure(liveCheck, FINGERPRINT_A, UNTRUSTED_LABEL, "file_attach"));
     const approved = await extension.next("command");
-    expect(approved).toMatchObject({ approved: true, approval_source: "extension_signed" });
+    expect(approved).toMatchObject({ approved: true, approval_source: "session" });
     extension.socket.send(JSON.stringify({
       type: "result",
       id: approved.id,
@@ -1959,6 +1903,15 @@ describe("BrowseWeave daemon integration", () => {
       result: { attached: true }
     }));
     expect(await retry).toMatchObject({ ok: true, result: { attached: true } });
+
+    // Changing the file produces a different parameter identity and therefore
+    // requires a fresh session decision.
+    await writeFile(attachment, "different numbers");
+    const tampered = ipcCall(harness, "attach_file", params);
+    const tamperedCommand = await extension.next("command");
+    expect(tamperedCommand.approved).toBe(false);
+    extension.socket.send(commandFailure(tamperedCommand, FINGERPRINT_B, UNTRUSTED_LABEL, "file_attach"));
+    expect(await tampered).toMatchObject({ ok: true, result: { approval_required: true } });
 
     await harness.daemon.stop("attach_audit_flush");
     const audit = await readFile(harness.config.auditLogPath, "utf8");
@@ -2004,8 +1957,8 @@ describe("BrowseWeave daemon integration", () => {
     expect(String(isJsonObjectForTest(refused) ? refused.error : "")).toMatch(/outside every directory/);
   });
 
-  it("confirms a session-approvable risk in the session and marks the executed command as session-sourced", async () => {
-    const harness = await startSessionApprovalHarness();
+  it("confirms a sensitive action only in the client session and marks execution as session-sourced", async () => {
+    const harness = await startHarness();
     const extension = await connectExtension(
       harness,
       makeSigningIdentity("55555555-5555-4555-8555-555555555555")
@@ -2015,27 +1968,12 @@ describe("BrowseWeave daemon integration", () => {
     const firstCall = ipcCall(harness, "click", params);
     const firstCommand = await extension.next("command");
     extension.socket.send(commandFailure(firstCommand, FINGERPRINT_A, UNTRUSTED_LABEL, "form_submit"));
-    const approvalRequest = await extension.next("approval_request");
-    expect(await firstCall).toMatchObject({
+    const approvalRequired = await firstCall;
+    expect(approvalRequired).toMatchObject({
       ok: true,
-      result: { approval_required: true, session_approval_available: true }
+      result: { approval_required: true, approval_ui: "mcp_session", session_approval_available: true }
     });
-
-    const begin = await ipcCall(harness, "session_approval_begin", {
-      approval_id: approvalRequest.approval_id as string
-    });
-    const challenge = isJsonObjectForTest(begin.result) ? String(begin.result.confirmation_phrase) : "";
-    expect(SESSION_CHALLENGE_PATTERN.test(challenge)).toBe(true);
-
-    // The phrase must never be reachable from a tool result or the audit log.
-    expect(JSON.stringify(await firstCall)).not.toContain(challenge);
-
-    const submitted = await ipcCall(harness, "session_approval_submit", {
-      approval_id: approvalRequest.approval_id as string,
-      decision: "approve",
-      confirmation_phrase: challenge
-    });
-    expect(submitted).toMatchObject({ ok: true, result: { decision: "approve" } });
+    const approvalId = await approvePendingInSession(harness, approvalRequired as Record<string, unknown>);
 
     const retry = ipcCall(harness, "click", params);
     const liveCheck = await extension.next("command");
@@ -2044,7 +1982,7 @@ describe("BrowseWeave daemon integration", () => {
     const approvedCommand = await extension.next("command");
     expect(approvedCommand).toMatchObject({
       approved: true,
-      approval_id: approvalRequest.approval_id,
+      approval_id: approvalId,
       approval_source: "session"
     });
     extension.socket.send(JSON.stringify({
@@ -2057,12 +1995,11 @@ describe("BrowseWeave daemon integration", () => {
 
     await harness.daemon.stop("session_approval_audit_flush");
     const audit = await readFile(harness.config.auditLogPath, "utf8");
-    expect(audit).not.toContain(challenge);
     expect(audit).toContain("session_approved");
   });
 
-  it("destroys the approval after one wrong confirmation phrase", async () => {
-    const harness = await startSessionApprovalHarness(["message"]);
+  it("accepts only one session decision for a pending action", async () => {
+    const harness = await startHarness();
     const extension = await connectExtension(
       harness,
       makeSigningIdentity("66666666-6666-4666-8666-666666666666")
@@ -2072,57 +2009,51 @@ describe("BrowseWeave daemon integration", () => {
     const call = ipcCall(harness, "click", params);
     const command = await extension.next("command");
     extension.socket.send(commandFailure(command, FINGERPRINT_A, UNTRUSTED_LABEL, "message"));
-    const approvalRequest = await extension.next("approval_request");
-    await call;
-
-    const begin = await ipcCall(harness, "session_approval_begin", {
-      approval_id: approvalRequest.approval_id as string
-    });
-    const challenge = isJsonObjectForTest(begin.result) ? String(begin.result.confirmation_phrase) : "";
-
-    const wrong = await ipcCall(harness, "session_approval_submit", {
-      approval_id: approvalRequest.approval_id as string,
-      decision: "approve",
-      confirmation_phrase: "amber cedar flint onyx"
-    });
-    expect(wrong).toMatchObject({ ok: false });
-
-    // The correct phrase must not rescue an approval already spent on a guess.
-    const retryWithTruth = await ipcCall(harness, "session_approval_submit", {
-      approval_id: approvalRequest.approval_id as string,
-      decision: "approve",
-      confirmation_phrase: challenge
-    });
-    expect(retryWithTruth).toMatchObject({ ok: false });
+    const required = await call;
+    const result = isJsonObjectForTest(required.result) ? required.result : {};
+    const approvalId = String(result.approval_id ?? "");
+    expect(await ipcCall(harness, "session_approval_submit", {
+      approval_id: approvalId,
+      decision: "reject"
+    })).toMatchObject({ ok: true, result: { decision: "reject" } });
+    expect(await ipcCall(harness, "session_approval_submit", {
+      approval_id: approvalId,
+      decision: "approve"
+    })).toMatchObject({ ok: false });
     expect(await ipcCall(harness, "status")).toMatchObject({ ok: true, result: { pending_approvals: 0 } });
   });
 
-  it("never offers session confirmation for a risk outside the opted-in tier", async () => {
-    const harness = await startSessionApprovalHarness(["form_submit"]);
+  it("offers session confirmation for every detected risk class", async () => {
+    const harness = await startHarness();
     const extension = await connectExtension(
       harness,
       makeSigningIdentity("77777777-7777-4777-8777-777777777777")
     );
     const params = { browser_id: extension.browserId, tab_id: 6, frame_id: 0, ref: "bw-4" };
 
-    const categories = ["password", "payment", "delete", "message"];
+    const categories = ["password", "payment", "delete", "security", "visual_click", "message"];
     for (const [index, category] of categories.entries()) {
       const call = ipcCall(harness, "click", { ...params, ref: `bw-${index + 20}` });
       const command = await extension.next("command");
       extension.socket.send(commandFailure(command, FINGERPRINT_A, UNTRUSTED_LABEL, category));
-      const approvalRequest = await extension.next("approval_request");
-      expect(await call).toMatchObject({
+      const required = await call;
+      expect(required).toMatchObject({
         ok: true,
-        result: { approval_required: true, session_approval_available: false }
+        result: { approval_required: true, approval_ui: "mcp_session", session_approval_available: true }
       });
+      const result = isJsonObjectForTest(required.result) ? required.result : {};
       const begin = await ipcCall(harness, "session_approval_begin", {
-        approval_id: approvalRequest.approval_id as string
+        approval_id: String(result.approval_id ?? "")
       });
-      expect(begin).toMatchObject({ ok: false });
+      expect(begin).toMatchObject({ ok: true, result: { risk: category } });
+      await ipcCall(harness, "session_approval_submit", {
+        approval_id: String(result.approval_id ?? ""),
+        decision: "reject"
+      });
     }
   });
 
-  it("accepts only an extension-signed approval and consumes it once after a fresh live fingerprint", async () => {
+  it("accepts a session decision and consumes it once after a fresh live fingerprint", async () => {
     const harness = await startHarness();
     const extension = await connectExtension(
       harness,
@@ -2133,37 +2064,16 @@ describe("BrowseWeave daemon integration", () => {
     const firstCall = ipcCall(harness, "click", params);
     const firstCommand = await extension.next("command");
     extension.socket.send(commandFailure(firstCommand, FINGERPRINT_A));
-    const approvalRequest = await extension.next("approval_request");
-    expect(approvalRequest).toMatchObject({ target_tab_id: 7, target_frame_id: 0 });
     const firstResult = await firstCall;
     expect(firstResult).toMatchObject({
       ok: true,
       result: {
         approval_required: true,
-        approval_ui: "browser_extension",
+        approval_ui: "mcp_session",
         browser_id: extension.browserId
       }
     });
-
-    const directConfirm = await ipcCall(harness, "confirm_pending", {
-      approval_id: approvalRequest.approval_id as string,
-      user_confirmed: true
-    });
-    expect(directConfirm).toMatchObject({ ok: false });
-
-    const approvalMessage = {
-      type: "approval_decision",
-      approval_id: approvalRequest.approval_id,
-      decision: "approve",
-      signature: signDecision(extension, approvalRequest, "approve")
-    };
-    extension.socket.send(JSON.stringify(approvalMessage));
-    expect(await extension.next("approval_resolved")).toMatchObject({ outcome: "approved" });
-
-    extension.socket.send(JSON.stringify(approvalMessage));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const afterReplay = await ipcCall(harness, "status");
-    expect(afterReplay).toMatchObject({ ok: true, result: { pending_approvals: 1 } });
+    const approvalId = await approvePendingInSession(harness, firstResult as Record<string, unknown>);
 
     const retry = ipcCall(harness, "click", params);
     const liveCheck = await extension.next("command");
@@ -2172,8 +2082,9 @@ describe("BrowseWeave daemon integration", () => {
     const approvedCommand = await extension.next("command");
     expect(approvedCommand).toMatchObject({
       approved: true,
-      approval_id: approvalRequest.approval_id,
+      approval_id: approvalId,
       approval_fingerprint: FINGERPRINT_A,
+      approval_source: "session",
       payload: { tab_id: 7, frame_id: 0, ref: "bw-3", text: SECRET_TEXT }
     });
     extension.socket.send(JSON.stringify({
@@ -2182,52 +2093,21 @@ describe("BrowseWeave daemon integration", () => {
       ok: true,
       result: { clicked: true }
     }));
-    expect(await extension.next("approval_resolved")).toMatchObject({
-      approval_id: approvalRequest.approval_id,
-      outcome: "consumed"
-    });
     expect(await retry).toMatchObject({ ok: true, result: { clicked: true, browser_id: extension.browserId } });
 
     const third = ipcCall(harness, "click", params);
     const thirdCommand = await extension.next("command");
     expect(thirdCommand.approved).toBe(false);
     extension.socket.send(commandFailure(thirdCommand, FINGERPRINT_A));
-    const secondApproval = await extension.next("approval_request");
-    expect(secondApproval.approval_id).not.toBe(approvalRequest.approval_id);
-    expect(await third).toMatchObject({ ok: true, result: { approval_required: true } });
+    const secondRequired = await third;
+    expect(secondRequired).toMatchObject({ ok: true, result: { approval_required: true } });
+    const secondResult = isJsonObjectForTest(secondRequired.result) ? secondRequired.result : {};
+    expect(secondResult.approval_id).not.toBe(approvalId);
 
     const audit = await readFile(harness.config.auditLogPath, "utf8");
     expect(audit).not.toContain(SECRET_TEXT);
     expect(audit).not.toContain(UNTRUSTED_LABEL);
-    expect(audit).not.toContain(String(approvalRequest.approval_id));
-  });
-
-  it("rejects a forged approval signature without creating a usable grant", async () => {
-    const harness = await startHarness();
-    const extension = await connectExtension(
-      harness,
-      makeSigningIdentity("55555555-5555-4555-8555-555555555555")
-    );
-    const call = ipcCall(harness, "click", { browser_id: extension.browserId, tab_id: 1, ref: "bw-1" });
-    const command = await extension.next("command");
-    extension.socket.send(commandFailure(command, FINGERPRINT_A));
-    const approval = await extension.next("approval_request");
-    await call;
-
-    const attacker = makeSigningIdentity("66666666-6666-4666-8666-666666666666");
-    extension.socket.send(JSON.stringify({
-      type: "approval_decision",
-      approval_id: approval.approval_id,
-      decision: "approve",
-      signature: signDecision(extension, approval, "approve", {}, attacker.privateKey)
-    }));
-    const [closeCode] = await once(extension.socket, "close") as [number, Buffer];
-    expect(closeCode).toBe(1008);
-    const status = await ipcCall(harness, "status");
-    expect(status).toMatchObject({
-      ok: true,
-      result: { connected_browsers: [], pending_approvals: 0 }
-    });
+    expect(audit).not.toContain(approvalId);
   });
 
   it("does not consume an approval when the fresh target fingerprint changes", async () => {
@@ -2240,24 +2120,17 @@ describe("BrowseWeave daemon integration", () => {
     const first = ipcCall(harness, "click", params);
     const command = await extension.next("command");
     extension.socket.send(commandFailure(command, FINGERPRINT_A));
-    const approval = await extension.next("approval_request");
-    await first;
-    extension.socket.send(JSON.stringify({
-      type: "approval_decision",
-      approval_id: approval.approval_id,
-      decision: "approve",
-      signature: signDecision(extension, approval, "approve")
-    }));
-    await extension.next("approval_resolved");
+    const required = await first;
+    const approvalId = await approvePendingInSession(harness, required as Record<string, unknown>);
 
     const retry = ipcCall(harness, "click", params);
     const liveCheck = await extension.next("command");
     expect(liveCheck).toMatchObject({ approved: false, revalidate_only: true });
     extension.socket.send(commandFailure(liveCheck, FINGERPRINT_B));
-    const replacementApproval = await extension.next("approval_request");
-    expect(replacementApproval.approval_fingerprint).toBe(FINGERPRINT_B);
-    expect(replacementApproval.approval_id).not.toBe(approval.approval_id);
-    expect(await retry).toMatchObject({ ok: true, result: { approval_required: true } });
+    const replacementRequired = await retry;
+    expect(replacementRequired).toMatchObject({ ok: true, result: { approval_required: true } });
+    const replacement = isJsonObjectForTest(replacementRequired.result) ? replacementRequired.result : {};
+    expect(replacement.approval_id).not.toBe(approvalId);
     await expect(extension.next("command", 100)).rejects.toThrow(/Timed out/u);
   });
 
@@ -2272,15 +2145,8 @@ describe("BrowseWeave daemon integration", () => {
     const firstCommand = await extension.next("command");
     expect(firstCommand).toMatchObject({ approved: false, revalidate_only: false });
     extension.socket.send(commandFailure(firstCommand, FINGERPRINT_A));
-    const approval = await extension.next("approval_request");
-    await first;
-    extension.socket.send(JSON.stringify({
-      type: "approval_decision",
-      approval_id: approval.approval_id,
-      decision: "approve",
-      signature: signDecision(extension, approval, "approve")
-    }));
-    await extension.next("approval_resolved");
+    const required = await first;
+    const approvalId = await approvePendingInSession(harness, required as Record<string, unknown>);
 
     const retry = ipcCall(harness, "click", params);
     const liveCheck = await extension.next("command");
@@ -2294,10 +2160,6 @@ describe("BrowseWeave daemon integration", () => {
         message: "The live target no longer has the approved risk context."
       }
     }));
-    expect(await extension.next("approval_resolved")).toMatchObject({
-      approval_id: approval.approval_id,
-      outcome: "cancelled"
-    });
     const result = await retry;
     expect(result).toMatchObject({ ok: false });
     if (!result.ok) expect(result.error).toMatch(/approval_no_longer_required/u);
@@ -2308,27 +2170,6 @@ describe("BrowseWeave daemon integration", () => {
     });
   });
 
-  it("binds approval decisions to every signed field", async () => {
-    const harness = await startHarness();
-    const extension = await connectExtension(
-      harness,
-      makeSigningIdentity("88888888-8888-4888-8888-888888888888")
-    );
-    const call = ipcCall(harness, "click", { browser_id: extension.browserId, tab_id: 2, ref: "bw-9" });
-    const command = await extension.next("command");
-    extension.socket.send(commandFailure(command, FINGERPRINT_A));
-    const approval = await extension.next("approval_request");
-    await call;
-
-    extension.socket.send(JSON.stringify({
-      type: "approval_decision",
-      approval_id: approval.approval_id,
-      decision: "approve",
-      signature: signDecision(extension, approval, "approve", { paramsSha256: FINGERPRINT_B })
-    }));
-    const [closeCode] = await once(extension.socket, "close") as [number, Buffer];
-    expect(closeCode).toBe(1008);
-  });
 });
 
 function isJsonObjectForTest(value: unknown): value is Record<string, unknown> {

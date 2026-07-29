@@ -40,40 +40,8 @@ export const BROWSER_ACTIONS = [
 
 export type BrowserAction = (typeof BROWSER_ACTIONS)[number];
 export type BrowserFamily = "firefox" | "chromium";
-export type ApprovalDecision = "approve" | "reject";
-
-/**
- * Where the authority for an approved command came from. `extension_signed` is
- * the default: the extension signed a decision with its non-exportable key and
- * holds a matching one-time grant. `session` means a human confirmed in the MCP
- * client session instead, which rests on the weaker assumption that the client
- * relays human input honestly, so it is limited to the risk classes below and
- * requires a separate opt-in in extension-owned settings.
- */
-export type ApprovalSource = "extension_signed" | "session";
-
-/**
- * Risk classes a human may confirm from the MCP session. Everything else —
- * payment, deletion, credentials, two-factor, account security, and every
- * semantic-free coordinate click — always requires the extension-signed
- * decision. Both the daemon and the extension read this one list.
- */
-export const SESSION_APPROVABLE_RISKS = ["form_submit", "message", "external_navigation"] as const;
-
-export type SessionApprovableRisk = (typeof SESSION_APPROVABLE_RISKS)[number];
-
-const SESSION_APPROVABLE_RISK_SET: ReadonlySet<string> = new Set(SESSION_APPROVABLE_RISKS);
-
-export function isSessionApprovableRisk(value: unknown): value is SessionApprovableRisk {
-  return typeof value === "string" && SESSION_APPROVABLE_RISK_SET.has(value);
-}
-
-/** Four lowercase words separated by single spaces. */
-export const SESSION_CHALLENGE_PATTERN = /^[a-z]{3,8}(?: [a-z]{3,8}){3}$/u;
-
-export function normalizeSessionChallenge(value: unknown): string {
-  return typeof value === "string" ? value.toLowerCase().replace(/\s+/gu, " ").trim() : "";
-}
+/** Sensitive actions are approved only by the human in the MCP client session. */
+export type ApprovalSource = "session";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -241,60 +209,14 @@ export interface ExtensionUnapprovedCommand extends ExtensionCommandBase {
 }
 
 export interface ExtensionApprovedCommand extends ExtensionCommandBase {
-  /** True only after a matching one-time decision from `approval_source` is consumed. */
+  /** True only after a matching one-time session decision is consumed. */
   approved: true;
-  /**
-   * For `extension_signed` this must match a still-live extension-owned grant
-   * created by the popup decision. For `session` no such grant exists, so the
-   * extension instead requires its own opt-in, an unreplayed approval ID, and a
-   * live risk class that is session-approvable.
-   */
   approval_id: string;
   approval_fingerprint: string;
-  approval_source: ApprovalSource;
+  approval_source: "session";
 }
 
 export type ExtensionCommand = ExtensionUnapprovedCommand | ExtensionApprovedCommand;
-
-/** Exact local-file identity shown by the trusted extension approval UI. */
-export interface ApprovalFileIdentity extends JsonObject {
-  name: string;
-  mime_type: string;
-  sha256: string;
-  size: number;
-}
-
-export interface ExtensionApprovalRequest {
-  type: "approval_request";
-  approval_id: string;
-  approval_nonce: string;
-  browser_id: string;
-  /** Exact live browser tab resolved by the extension before it requested approval. */
-  target_tab_id: number;
-  /** Exact live frame resolved by the extension; zero is the top-level document. */
-  target_frame_id: number;
-  action: BrowserAction;
-  risk: string;
-  description: string;
-  params_sha256: string;
-  approval_fingerprint: string;
-  expires_at: string;
-  /** Required only for attach_file; derived from the exact bytes in params_sha256. */
-  file?: ApprovalFileIdentity;
-}
-
-export interface ExtensionApprovalResolved {
-  type: "approval_resolved";
-  approval_id: string;
-  outcome: "approved" | "rejected" | "consumed" | "cancelled" | "expired";
-}
-
-export interface ExtensionApprovalDecision {
-  type: "approval_decision";
-  approval_id: string;
-  decision: ApprovalDecision;
-  signature: string;
-}
 
 export interface ExtensionError {
   code: string;
@@ -326,16 +248,13 @@ export type ExtensionInboundMessage =
   | SetupPairingRequest
   | ExtensionHello
   | ExtensionResult
-  | ExtensionApprovalDecision
   | ExtensionPong;
 export type ExtensionOutboundMessage =
   | ServerChallenge
   | SetupPairingResponse
   | ExtensionHelloAck
   | ServerPing
-  | ExtensionCommand
-  | ExtensionApprovalRequest
-  | ExtensionApprovalResolved;
+  | ExtensionCommand;
 
 export interface IpcClientHello {
   type: "ipc_client_hello";
@@ -384,7 +303,7 @@ export type IpcResponse = IpcSuccessResponse | IpcFailureResponse;
 export interface ApprovalRequiredResult extends JsonObject {
   approval_required: true;
   approval_id: string;
-  approval_ui: "browser_extension";
+  approval_ui: "mcp_session";
   browser_id: string;
   target_tab_id: number;
   target_frame_id: number;
@@ -393,11 +312,7 @@ export interface ApprovalRequiredResult extends JsonObject {
   action: BrowserAction;
   expires_at: string;
   message: string;
-  /**
-   * Whether this approval may instead be confirmed in the MCP session. The
-   * confirmation phrase is deliberately absent here: it is issued only over
-   * authenticated IPC to the MCP server and never enters a tool result.
-   */
+  /** Always true for sensitive actions; the extension never asks for approval. */
   session_approval_available: boolean;
 }
 
@@ -647,31 +562,4 @@ export function ipcClientProofPayload(input: {
     framedField("request_id", input.requestId) +
     framedField("method", input.method) +
     framedField("params_sha256", input.paramsSha256);
-}
-
-export function approvalDecisionSigningPayload(input: {
-  daemonInstanceId: string;
-  approvalId: string;
-  approvalNonce: string;
-  browserId: string;
-  targetTabId: number;
-  targetFrameId: number;
-  decision: ApprovalDecision;
-  action: BrowserAction;
-  paramsSha256: string;
-  approvalFingerprint: string;
-  expiresAt: string;
-}): string {
-  return "BrowseWeave approval decision signature v2\n" +
-    framedField("daemon_instance_id", input.daemonInstanceId) +
-    framedField("approval_id", input.approvalId) +
-    framedField("approval_nonce", input.approvalNonce) +
-    framedField("browser_id", input.browserId) +
-    framedField("target_tab_id", String(input.targetTabId)) +
-    framedField("target_frame_id", String(input.targetFrameId)) +
-    framedField("decision", input.decision) +
-    framedField("action", input.action) +
-    framedField("params_sha256", input.paramsSha256) +
-    framedField("approval_fingerprint", input.approvalFingerprint) +
-    framedField("expires_at", input.expiresAt);
 }

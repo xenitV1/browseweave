@@ -4,9 +4,9 @@
  *
  * This is the only place in BrowseWeave that reads a file the user did not
  * hand to it directly, so it is the primary defence for the whole feature.
- * Attachment always requires the extension-owned approval UI in addition to
- * this policy. The policy still fails closed so an injected instruction cannot
- * turn a generic approval request into arbitrary local-file access.
+ * Attachment always requires a bound human decision in the MCP client session
+ * in addition to this policy. The policy still fails closed so an injected
+ * instruction cannot turn a generic confirmation into arbitrary file access.
  *
  * Default deny: with no policy file, nothing is attachable.
  */

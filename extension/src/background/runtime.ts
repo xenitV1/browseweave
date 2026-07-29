@@ -8,7 +8,6 @@ import {
   classifyRisk,
   diffSnapshots,
   externalNavigationRisk,
-  maskUntrustedApprovalDescription,
   mutationIntervalMs,
   normalizeNavigationUrl,
   normalizePagination,
@@ -22,32 +21,19 @@ import {
   type ViewportState
 } from "../shared/pure";
 import {
-  BASE64URL_PATTERN,
   BROWSER_ACTIONS,
   MAX_EXTENSION_INCOMING_MESSAGE_BYTES,
   PROTOCOL_VERSION,
-  SHA256_PATTERN,
-  approvalDecisionSigningPayload,
   isApprovalFingerprint,
   isBrowserAction,
   isJsonObject,
   isJsonValue,
-  type ApprovalFileIdentity,
-  type ApprovalDecision,
   type ApprovalSource,
   type BrowserAction,
   type BrowserIdentity,
-  type ExtensionApprovalRequest,
   type JsonObject,
   type P256PublicJwk
 } from "../../../src/core/protocol";
-import {
-  ApprovalGrantLedger,
-  MAX_LOCAL_APPROVAL_GRANTS,
-  hashCommandParams,
-  isLocalApprovalGrant,
-  type LocalApprovalGrant
-} from "../security/approval-grants";
 import { ExtensionHandshake } from "../security/handshake";
 import {
   SETUP_PAIRING_TIMEOUT_MS,
@@ -127,49 +113,6 @@ interface ConnectionState {
   reconnectAttempt: number;
 }
 
-interface PublicApproval {
-  approval_id: string;
-  action: BrowserAction;
-  risk: string;
-  description: string;
-  expires_at: string;
-  approval_fingerprint: string;
-  target_tab_id: number;
-  target_frame_id: number;
-  target_origin: string;
-  target_site: string;
-  target_title: string;
-  destination_origin: string;
-  file?: ApprovalFileIdentity;
-}
-
-interface TrustedApprovalTarget {
-  tab_id: number;
-  frame_id: number;
-  origin: string;
-  site: string;
-  title: string;
-  binding_fingerprint: string;
-  destination_origin: string;
-}
-
-interface LocalApprovalContext {
-  action: BrowserAction;
-  target_tab_id: number;
-  target_frame_id: number;
-  destination_origin: string;
-  source_binding_fingerprint: string;
-  expires_at: number;
-  file?: ApprovalFileIdentity;
-}
-
-interface PendingApproval extends ExtensionApprovalRequest {
-  daemon_instance_id: string;
-  received_at: string;
-  safe_description: string;
-  trusted_target: TrustedApprovalTarget;
-}
-
 interface HumanInterventionState {
   tab_id: number;
   origin: string;
@@ -223,11 +166,9 @@ const AUTHENTICATION_TIMEOUT_MS = 10_000;
 const MAX_MUTATION_INTERVAL_MS = 5_000;
 /** How long a tab keeps the conservative pacing after a detected challenge. */
 const MUTATION_STRESS_WINDOW_MS = 60_000;
-const SESSION_APPROVAL_STORAGE_KEY = "browseweave_session_approval_v1";
 /** Comfortably longer than the daemon's approval TTL, so a replay always lands inside it. */
 const SESSION_APPROVAL_REPLAY_WINDOW_MS = 15 * 60_000;
 const SESSION_STATE_STORAGE_KEY = "browseweave_session_state_v2";
-const LOCAL_APPROVAL_GRANTS_SESSION_KEY = "browseweave_local_approval_grants_v2";
 
 interface SnapshotCacheEntry {
   tabId: number;
@@ -246,8 +187,6 @@ interface ScreenshotCacheEntry {
 }
 
 const screenshotCache = new Map<string, ScreenshotCacheEntry>();
-const pendingApprovals = new Map<string, PendingApproval>();
-const localApprovalContexts = new Map<string, LocalApprovalContext>();
 const contentInjectionFlights = new Map<number, Promise<void>>();
 const humanInterventions = new Map<number, HumanInterventionState>();
 const pausedOrigins = new Map<string, HumanInterventionState["kind"]>();
@@ -281,9 +220,6 @@ let currentIdentity: BrowserIdentity | null = null;
 let connectionHandshake: ExtensionHandshake | null = null;
 let sessionStateLoaded = false;
 let sessionWriteQueue: Promise<void> = Promise.resolve();
-let localApprovalGrantsLoaded = false;
-let localApprovalGrantsLock: Promise<void> = Promise.resolve();
-let localApprovalGrants = new ApprovalGrantLedger();
 let setupPairingInProgress = false;
 let nativeSetupLaunchInProgress = false;
 let state: ConnectionState = {
@@ -367,7 +303,6 @@ function persistSessionState(): Promise<void> {
   const sessionValue = {
     snapshots: [...snapshotCache.entries()],
     screenshots: [...screenshotCache.entries()],
-    approvals: [...pendingApprovals.values()],
     human_interventions: [...humanInterventions.values()]
   };
   sessionWriteQueue = sessionWriteQueue
@@ -379,154 +314,11 @@ function persistSessionState(): Promise<void> {
   return sessionWriteQueue;
 }
 
-function approvalGrantStorageError(message: string, cause?: unknown): BridgeError {
-  return new BridgeError(
-    "approval_grant_storage_unavailable",
-    message,
-    undefined,
-    cause === undefined ? undefined : { cause: cause instanceof Error ? cause.message : String(cause) }
-  );
-}
-
-async function withLocalApprovalGrantsLock<T>(operation: () => Promise<T>): Promise<T> {
-  const previous = localApprovalGrantsLock;
-  let release: (() => void) | undefined;
-  localApprovalGrantsLock = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous.catch(() => undefined);
-  try {
-    return await operation();
-  } finally {
-    release?.();
-  }
-}
-
-async function persistLocalApprovalGrantsUnlocked(): Promise<void> {
-  const area = sessionStorageArea();
-  if (!area) throw approvalGrantStorageError("Trusted session storage for local approvals is unavailable.");
-  try {
-    await area.set({
-      [LOCAL_APPROVAL_GRANTS_SESSION_KEY]: {
-        version: 2,
-        grants: localApprovalGrants.snapshot()
-      }
-    });
-  } catch (error) {
-    throw approvalGrantStorageError("BrowseWeave could not persist the local one-time approval grant.", error);
-  }
-}
-
-async function ensureLocalApprovalGrantsLoadedUnlocked(): Promise<void> {
-  if (localApprovalGrantsLoaded) return;
-  const area = sessionStorageArea();
-  if (!area) throw approvalGrantStorageError("Trusted session storage for local approvals is unavailable.");
-  let stored: Record<string, unknown>;
-  try {
-    stored = await area.get(LOCAL_APPROVAL_GRANTS_SESSION_KEY);
-  } catch (error) {
-    throw approvalGrantStorageError("BrowseWeave could not read its local approval grants.", error);
-  }
-  const value = stored[LOCAL_APPROVAL_GRANTS_SESSION_KEY];
-  if (value === undefined) {
-    localApprovalGrantsLoaded = true;
-    return;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw approvalGrantStorageError("The local approval-grant ledger failed integrity checks.");
-  }
-  const record = value as Record<string, unknown>;
-  const rawGrants = record.grants;
-  if (
-    record.version !== 2 || !Array.isArray(rawGrants) || rawGrants.length > MAX_LOCAL_APPROVAL_GRANTS ||
-    rawGrants.some((grant) => !isLocalApprovalGrant(grant))
-  ) {
-    throw approvalGrantStorageError("The local approval-grant ledger failed integrity checks.");
-  }
-  try {
-    localApprovalGrants = new ApprovalGrantLedger(rawGrants as LocalApprovalGrant[]);
-  } catch (error) {
-    throw approvalGrantStorageError("The local approval-grant ledger failed integrity checks.", error);
-  }
-  localApprovalGrantsLoaded = true;
-  if (localApprovalGrants.prune()) await persistLocalApprovalGrantsUnlocked();
-}
-
-async function saveLocalApprovalGrant(approval: PendingApproval): Promise<void> {
-  await withLocalApprovalGrantsLock(async () => {
-    await ensureLocalApprovalGrantsLoadedUnlocked();
-    const grant: LocalApprovalGrant = {
-      approval_id: approval.approval_id,
-      daemon_instance_id: approval.daemon_instance_id,
-      browser_id: approval.browser_id,
-      target_tab_id: approval.target_tab_id,
-      target_frame_id: approval.target_frame_id,
-      action: approval.action,
-      params_sha256: approval.params_sha256,
-      approval_fingerprint: approval.approval_fingerprint,
-      expires_at: approval.expires_at,
-      decision: "approve"
-    };
-    localApprovalGrants.add(grant);
-    try {
-      await persistLocalApprovalGrantsUnlocked();
-    } catch (error) {
-      localApprovalGrants.revoke(grant.approval_id);
-      throw error;
-    }
-  });
-}
-
-async function revokeLocalApprovalGrant(approvalId: string): Promise<void> {
-  await withLocalApprovalGrantsLock(async () => {
-    await ensureLocalApprovalGrantsLoadedUnlocked();
-    if (!localApprovalGrants.revoke(approvalId)) return;
-    await persistLocalApprovalGrantsUnlocked();
-  });
-}
-
-async function revokeLocalApprovalGrantsForDaemon(disconnectedDaemonInstanceId: string): Promise<void> {
-  if (!disconnectedDaemonInstanceId) return;
-  await withLocalApprovalGrantsLock(async () => {
-    await ensureLocalApprovalGrantsLoadedUnlocked();
-    if (localApprovalGrants.revokeForDaemon(disconnectedDaemonInstanceId) === 0) return;
-    await persistLocalApprovalGrantsUnlocked();
-  });
-}
-
-async function revokeLocalApprovalGrantsForTarget(targetTabId: number, targetFrameId?: number): Promise<void> {
-  await withLocalApprovalGrantsLock(async () => {
-    await ensureLocalApprovalGrantsLoadedUnlocked();
-    if (localApprovalGrants.revokeForTarget(targetTabId, targetFrameId) === 0) return;
-    await persistLocalApprovalGrantsUnlocked();
-  });
-}
-
 /**
- * The browser owner's opt-in for session-confirmed approvals. It lives in
- * extension storage and is writable only from the trusted settings page, so the
- * daemon alone can never enable this weaker authority. Absent means off.
- */
-async function sessionApprovalEnabled(): Promise<boolean> {
-  try {
-    const stored = await extensionBrowser.storage.local.get(SESSION_APPROVAL_STORAGE_KEY);
-    return stored[SESSION_APPROVAL_STORAGE_KEY] === true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Second gate for a session-confirmed command, independent of the content
- * script's live risk check. Fails closed on a disabled toggle or a replayed ID.
+ * Rejects replayed session decisions. Live target and fingerprint checks remain
+ * enforced independently before the action executes.
  */
 async function consumeSessionApproval(approvalId: string): Promise<void> {
-  if (!await sessionApprovalEnabled()) {
-    throw new BridgeError(
-      "session_approval_disabled",
-      "Session-confirmed approval is turned off in BrowseWeave settings. Approve this action in the extension instead."
-    );
-  }
   const now = Date.now();
   for (const [id, expiresAt] of consumedSessionApprovals) {
     if (expiresAt <= now) consumedSessionApprovals.delete(id);
@@ -538,38 +330,6 @@ async function consumeSessionApproval(approvalId: string): Promise<void> {
     );
   }
   consumedSessionApprovals.set(approvalId, now + SESSION_APPROVAL_REPLAY_WINDOW_MS);
-}
-
-async function consumeLocalApprovalGrant(
-  approvalId: string,
-  action: BrowserAction,
-  payload: JsonObject,
-  approvalFingerprintValue: string,
-  targetTabIdValue: number,
-  targetFrameIdValue: number
-): Promise<void> {
-  const paramsSha256 = await hashCommandParams(payload);
-  await withLocalApprovalGrantsLock(async () => {
-    await ensureLocalApprovalGrantsLoadedUnlocked();
-    const result = localApprovalGrants.consume({
-      approvalId,
-      daemonInstanceId,
-      browserId,
-      targetTabId: targetTabIdValue,
-      targetFrameId: targetFrameIdValue,
-      action,
-      paramsSha256,
-      approvalFingerprint: approvalFingerprintValue
-    });
-    if (result.mutated) await persistLocalApprovalGrantsUnlocked();
-    if (result.ok) return;
-    const messages: Record<typeof result.code, string> = {
-      approval_grant_missing: "No extension-owned human approval grant exists for this command, or it was already consumed.",
-      approval_grant_expired: "The extension-owned human approval grant expired before execution.",
-      approval_grant_mismatch: "The approved command does not match the one-time grant created by the BrowseWeave popup."
-    };
-    throw new BridgeError(result.code, messages[result.code]);
-  });
 }
 
 interface CredentialBindingReply {
@@ -634,7 +394,6 @@ function publicState(): Record<string, unknown> {
     protocol_version: PROTOCOL_VERSION,
     browser_id: browserId || null,
     identity: currentIdentity,
-    pending_approvals: pendingApprovals.size,
     managed_tab_count: managedTabCount(),
     managed_tab_limit: MAX_MANAGED_TABS,
     requires_human: humanInterventions.size > 0,
@@ -644,9 +403,7 @@ function publicState(): Record<string, unknown> {
 
 async function updateBadge(): Promise<void> {
   if (!extensionAction) return;
-  const badge = pendingApprovals.size > 0
-    ? { text: pendingApprovals.size > 99 ? "99+" : String(pendingApprovals.size), color: "#b54708" }
-    : humanInterventions.size > 0
+  const badge = humanInterventions.size > 0
       ? { text: "H!", color: "#b42318" }
     : state.phase === "connected"
     ? { text: "ON", color: "#248a55" }
@@ -658,9 +415,7 @@ async function updateBadge(): Promise<void> {
   await extensionAction.setBadgeBackgroundColor({ color: badge.color }).catch(() => undefined);
   await extensionAction.setBadgeText({ text: badge.text }).catch(() => undefined);
   await extensionAction.setTitle({
-    title: pendingApprovals.size > 0
-      ? `${pendingApprovals.size} BrowseWeave approval${pendingApprovals.size === 1 ? "" : "s"} waiting`
-      : humanInterventions.size > 0
+    title: humanInterventions.size > 0
         ? "BrowseWeave is paused for direct user action"
       : state.phase === "connected" ? "BrowseWeave is connected" : "BrowseWeave is waiting for the local bridge"
   }).catch(() => undefined);
@@ -670,12 +425,6 @@ function setState(patch: Partial<ConnectionState>): void {
   state = { ...state, ...patch };
   void updateBadge();
   void extensionBrowser.runtime.sendMessage({ kind: "bridge:state", state: publicState() }).catch(() => undefined);
-}
-
-function notifyApprovalState(): void {
-  void updateBadge();
-  void persistSessionState();
-  void extensionBrowser.runtime.sendMessage({ kind: "bridge:approvals", pending: pendingApprovals.size }).catch(() => undefined);
 }
 
 function notifyHumanState(): void {
@@ -742,23 +491,12 @@ function scheduleReconnect(generation: number): void {
   }, delay);
 }
 
-function clearPendingApprovals(): void {
-  const changed = pendingApprovals.size > 0;
-  pendingApprovals.clear();
-  localApprovalContexts.clear();
-  if (changed) notifyApprovalState();
-}
-
 function closeCurrentSocket(): void {
-  const disconnectedDaemonInstanceId = daemonInstanceId;
   authenticated = false;
   daemonInstanceId = "";
   browserId = "";
   currentIdentity = null;
   connectionHandshake = null;
-  if (disconnectedDaemonInstanceId) {
-    void revokeLocalApprovalGrantsForDaemon(disconnectedDaemonInstanceId).catch(() => undefined);
-  }
   clearConnectionTimers();
   if (socket) {
     const oldSocket = socket;
@@ -784,7 +522,6 @@ async function connect(staged?: {
   const generation = ++connectionGeneration;
   await ensureSessionStateLoaded();
   closeCurrentSocket();
-  clearPendingApprovals();
 
   const token = staged?.pairingToken ?? ordinaryOverride?.pairingToken ?? await storedToken();
   if (generation !== connectionGeneration) return;
@@ -858,18 +595,13 @@ async function connect(staged?: {
 
   nextSocket.onclose = (event) => {
     if (generation !== connectionGeneration || socket !== nextSocket) return;
-    const disconnectedDaemonInstanceId = daemonInstanceId;
     socket = null;
     authenticated = false;
     daemonInstanceId = "";
     browserId = "";
     currentIdentity = null;
     connectionHandshake = null;
-    if (disconnectedDaemonInstanceId) {
-      void revokeLocalApprovalGrantsForDaemon(disconnectedDaemonInstanceId).catch(() => undefined);
-    }
     clearConnectionTimers();
-    clearPendingApprovals();
     const reason = event.code === 1008
       ? "The pairing key or browser identity was rejected."
       : "The local bridge connection closed.";
@@ -1186,221 +918,6 @@ async function sendSignedHello(
   currentSocket.send(JSON.stringify(hello));
 }
 
-function publicApproval(approval: PendingApproval): PublicApproval {
-  return {
-    approval_id: approval.approval_id,
-    action: approval.action,
-    risk: normalizeText(approval.risk, 80) || "sensitive_action",
-    description: approval.safe_description,
-    expires_at: approval.expires_at,
-    approval_fingerprint: approval.approval_fingerprint,
-    target_tab_id: approval.target_tab_id,
-    target_frame_id: approval.target_frame_id,
-    target_origin: approval.trusted_target.origin,
-    target_site: approval.trusted_target.site,
-    target_title: approval.trusted_target.title,
-    destination_origin: approval.trusted_target.destination_origin,
-    ...(approval.file ? { file: { ...approval.file } } : {})
-  };
-}
-
-function pruneApprovals(now = Date.now()): void {
-  let changed = false;
-  for (const [approvalId, approval] of pendingApprovals) {
-    if (Date.parse(approval.expires_at) <= now) {
-      pendingApprovals.delete(approvalId);
-      changed = true;
-    }
-  }
-  if (changed) notifyApprovalState();
-}
-
-async function invalidateApprovalTarget(tabIdValue: number, frameIdValue?: number): Promise<void> {
-  let changed = false;
-  for (const [approvalId, approval] of pendingApprovals) {
-    if (approval.target_tab_id !== tabIdValue) continue;
-    if (frameIdValue !== undefined && approval.target_frame_id !== frameIdValue) continue;
-    pendingApprovals.delete(approvalId);
-    changed = true;
-  }
-  for (const [fingerprint, context] of localApprovalContexts) {
-    if (context.target_tab_id !== tabIdValue) continue;
-    if (frameIdValue !== undefined && context.target_frame_id !== frameIdValue) continue;
-    localApprovalContexts.delete(fingerprint);
-  }
-  await revokeLocalApprovalGrantsForTarget(tabIdValue, frameIdValue).catch(() => undefined);
-  if (changed) notifyApprovalState();
-}
-
-type ParsedApprovalRequest = Omit<PendingApproval, "trusted_target">;
-
-function approvalFileIdentity(value: unknown): ApprovalFileIdentity | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const file = value as Record<string, unknown>;
-  if (
-    typeof file.name !== "string" || file.name.length < 1 || file.name.length > 255 ||
-      /[\\/\0\r\n]/u.test(file.name) ||
-    typeof file.mime_type !== "string" || file.mime_type.length > 192 ||
-      !/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/iu.test(file.mime_type) ||
-    typeof file.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(file.sha256) ||
-    typeof file.size !== "number" || !Number.isSafeInteger(file.size) || file.size < 0 ||
-      file.size > 8 * 1024 * 1024
-  ) return undefined;
-  return { name: file.name, mime_type: file.mime_type, sha256: file.sha256, size: file.size };
-}
-
-function sameApprovalFile(left: ApprovalFileIdentity | undefined, right: ApprovalFileIdentity | undefined): boolean {
-  return left === undefined
-    ? right === undefined
-    : right !== undefined && left.name === right.name && left.mime_type === right.mime_type &&
-      left.sha256 === right.sha256 && left.size === right.size;
-}
-
-function parseApprovalRequest(record: Record<string, unknown>): ParsedApprovalRequest | null {
-  if (
-    record.type !== "approval_request" ||
-    typeof record.approval_id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/u.test(record.approval_id) ||
-    typeof record.approval_nonce !== "string" || record.approval_nonce.length < 16 ||
-      record.approval_nonce.length > 512 || !BASE64URL_PATTERN.test(record.approval_nonce) ||
-    typeof record.browser_id !== "string" || record.browser_id !== browserId ||
-    typeof record.target_tab_id !== "number" || !Number.isSafeInteger(record.target_tab_id) || record.target_tab_id <= 0 ||
-    typeof record.target_frame_id !== "number" || !Number.isSafeInteger(record.target_frame_id) || record.target_frame_id < 0 ||
-    !isBrowserAction(record.action) ||
-    typeof record.risk !== "string" || record.risk.length > 160 ||
-    typeof record.description !== "string" || record.description.length > 4_000 ||
-    typeof record.params_sha256 !== "string" || !SHA256_PATTERN.test(record.params_sha256) ||
-    !isApprovalFingerprint(record.approval_fingerprint) ||
-    typeof record.expires_at !== "string"
-  ) return null;
-  const file = approvalFileIdentity(record.file);
-  if ((record.action === "attach_file") !== (file !== undefined) || (record.file !== undefined && file === undefined)) {
-    return null;
-  }
-  const expiresAt = Date.parse(record.expires_at);
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + 30 * 60_000) return null;
-  const safeDescription = maskUntrustedApprovalDescription(record.description);
-  return {
-    type: "approval_request",
-    approval_id: record.approval_id,
-    approval_nonce: record.approval_nonce,
-    browser_id: record.browser_id,
-    target_tab_id: record.target_tab_id,
-    target_frame_id: record.target_frame_id,
-    action: record.action,
-    risk: normalizeText(record.risk, 160),
-    description: safeDescription,
-    params_sha256: record.params_sha256,
-    approval_fingerprint: record.approval_fingerprint,
-    expires_at: record.expires_at,
-    daemon_instance_id: daemonInstanceId,
-    received_at: new Date().toISOString(),
-    safe_description: safeDescription,
-    ...(file ? { file } : {})
-  };
-}
-
-async function trustedApprovalTarget(approval: ParsedApprovalRequest): Promise<TrustedApprovalTarget> {
-  let tab: browser.tabs.Tab;
-  try {
-    tab = await extensionBrowser.tabs.get(approval.target_tab_id);
-  } catch {
-    throw new Error("The approval target tab no longer exists.");
-  }
-  if (tabId(tab) !== approval.target_tab_id) throw new Error("The approval target tab changed.");
-  const rawProbe = await sendContentCommand(tab, approval.target_frame_id, "approval_target_probe", {
-    approval_fingerprint: approval.approval_fingerprint,
-    require_risk_binding: approval.action !== "navigate"
-  }, false);
-  if (!rawProbe || typeof rawProbe !== "object" || Array.isArray(rawProbe)) {
-    throw new Error("The approval target document could not be verified.");
-  }
-  const probe = rawProbe as Record<string, unknown>;
-  if (
-    typeof probe.origin !== "string" || !/^https?:\/\//u.test(probe.origin) ||
-    typeof probe.document_epoch !== "string" || probe.document_epoch.length < 8 || probe.document_epoch.length > 128 ||
-    typeof probe.binding_fingerprint !== "string" || !isApprovalFingerprint(probe.binding_fingerprint)
-  ) throw new Error("The approval target document returned an invalid binding.");
-  const parsedOrigin = new URL(probe.origin);
-  if (parsedOrigin.origin !== probe.origin) throw new Error("The approval target origin is invalid.");
-  const probedDestination = probe.destination_origin === "" ? "" : exactWebOrigin(probe.destination_origin);
-  if (probe.destination_origin !== "" && !probedDestination) {
-    throw new Error("The approval destination origin is invalid.");
-  }
-  const localContext = localApprovalContexts.get(approval.approval_fingerprint);
-  const localContextMatches = Boolean(
-    localContext && localContext.expires_at > Date.now() && localContext.action === approval.action &&
-    localContext.target_tab_id === approval.target_tab_id && localContext.target_frame_id === approval.target_frame_id
-  );
-  if (
-    approval.action === "navigate" && (
-      !localContextMatches || !localContext?.source_binding_fingerprint ||
-      localContext.source_binding_fingerprint !== probe.binding_fingerprint
-    )
-  ) throw new Error("The navigation source document changed before approval.");
-  const destinationOrigin = probedDestination || (
-    localContextMatches && localContext
-      ? localContext.destination_origin
-      : ""
-  );
-  return {
-    tab_id: approval.target_tab_id,
-    frame_id: approval.target_frame_id,
-    origin: parsedOrigin.origin,
-    site: `${parsedOrigin.protocol}//${parsedOrigin.host}`,
-    title: normalizeText(tab.title || "Untitled tab", 120),
-    binding_fingerprint: probe.binding_fingerprint,
-    destination_origin: destinationOrigin
-  };
-}
-
-async function receiveApprovalRequest(record: Record<string, unknown>, currentSocket: WebSocket): Promise<void> {
-  const approval = parseApprovalRequest(record);
-  if (!approval || pendingApprovals.size >= 100 || pendingApprovals.has(approval?.approval_id || "")) {
-    currentSocket.close(1008, "invalid approval request");
-    return;
-  }
-  let trustedTarget: TrustedApprovalTarget;
-  try {
-    trustedTarget = await trustedApprovalTarget(approval);
-  } catch {
-    currentSocket.close(1008, "invalid approval target");
-    return;
-  }
-  const localContext = localApprovalContexts.get(approval.approval_fingerprint);
-  if (
-    localContext && localContext.expires_at > Date.now() && localContext.action === approval.action &&
-    localContext.target_tab_id === approval.target_tab_id && localContext.target_frame_id === approval.target_frame_id
-  ) {
-    if (!trustedTarget.destination_origin) trustedTarget.destination_origin = localContext.destination_origin;
-  }
-  if (approval.action === "attach_file" && !sameApprovalFile(approval.file, localContext?.file)) {
-    currentSocket.close(1008, "mismatched approval file identity");
-    return;
-  }
-  if (approval.risk === "external_navigation" && !trustedTarget.destination_origin) {
-    currentSocket.close(1008, "missing trusted approval destination");
-    return;
-  }
-  if (!authenticated || socket !== currentSocket || currentSocket.readyState !== WebSocket.OPEN) return;
-  pendingApprovals.set(approval.approval_id, { ...approval, trusted_target: trustedTarget });
-  notifyApprovalState();
-}
-
-function receiveApprovalResolution(record: Record<string, unknown>, currentSocket: WebSocket): void {
-  const outcomes = new Set(["approved", "rejected", "consumed", "cancelled", "expired"]);
-  if (
-    typeof record.approval_id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/u.test(record.approval_id) ||
-    typeof record.outcome !== "string" || !outcomes.has(record.outcome)
-  ) {
-    currentSocket.close(1008, "invalid approval resolution");
-    return;
-  }
-  if (pendingApprovals.delete(record.approval_id)) notifyApprovalState();
-  if (record.outcome !== "approved") {
-    void revokeLocalApprovalGrant(record.approval_id).catch(() => undefined);
-  }
-}
-
 async function handleSocketMessage(
   rawData: unknown,
   currentSocket: WebSocket,
@@ -1469,22 +986,6 @@ async function handleSocketMessage(
     currentSocket.send(JSON.stringify({ type: "pong", timestamp: record.timestamp }));
     return;
   }
-  if (record.type === "approval_request") {
-    if (!authenticated) {
-      currentSocket.close(1008, "not authenticated");
-      return;
-    }
-    await receiveApprovalRequest(record, currentSocket);
-    return;
-  }
-  if (record.type === "approval_resolved") {
-    if (!authenticated) {
-      currentSocket.close(1008, "not authenticated");
-      return;
-    }
-    receiveApprovalResolution(record, currentSocket);
-    return;
-  }
   if (record.type !== "command") {
     currentSocket.close(1002, "unexpected message");
     return;
@@ -1494,76 +995,6 @@ async function handleSocketMessage(
     return;
   }
   await handleCommand(record as unknown as CommandMessage, currentSocket, generation);
-}
-
-async function decideApproval(approvalId: string, decision: ApprovalDecision): Promise<{ ok: true }> {
-  pruneApprovals();
-  const approval = pendingApprovals.get(approvalId);
-  if (!approval) throw new Error("This approval is no longer pending.");
-  if (
-    !authenticated || !socket || socket.readyState !== WebSocket.OPEN ||
-    !daemonInstanceId || approval.daemon_instance_id !== daemonInstanceId ||
-    !browserId || approval.browser_id !== browserId
-  ) throw new Error("The local bridge connection changed. Request a new approval.");
-
-  const sameTrustedTarget = (candidate: TrustedApprovalTarget): boolean => (
-    candidate.tab_id === approval.trusted_target.tab_id &&
-    candidate.frame_id === approval.trusted_target.frame_id &&
-    candidate.origin === approval.trusted_target.origin &&
-    candidate.binding_fingerprint === approval.trusted_target.binding_fingerprint &&
-    candidate.destination_origin === approval.trusted_target.destination_origin
-  );
-  if (decision === "approve" && !sameTrustedTarget(await trustedApprovalTarget(approval))) {
-    throw new Error("The target tab, origin, or document changed. Review the page and request a new approval.");
-  }
-
-  const decisionPayload = approvalDecisionSigningPayload({
-    daemonInstanceId,
-    approvalId: approval.approval_id,
-    approvalNonce: approval.approval_nonce,
-    browserId: approval.browser_id,
-    targetTabId: approval.target_tab_id,
-    targetFrameId: approval.target_frame_id,
-    decision,
-    action: approval.action,
-    paramsSha256: approval.params_sha256,
-    approvalFingerprint: approval.approval_fingerprint,
-    expiresAt: approval.expires_at
-  });
-  const signature = await signPayload(decisionPayload);
-  const currentSocket = socket;
-  if (decision === "approve" && !sameTrustedTarget(await trustedApprovalTarget(approval))) {
-    throw new Error("The target changed while the approval was being signed. Request a new approval.");
-  }
-  if (
-    pendingApprovals.get(approvalId) !== approval || socket !== currentSocket ||
-    currentSocket.readyState !== WebSocket.OPEN || Date.parse(approval.expires_at) <= Date.now()
-  ) throw new Error("This approval expired before the decision could be sent.");
-  let localGrantSaved = false;
-  if (decision === "approve") {
-    await saveLocalApprovalGrant(approval);
-    localGrantSaved = true;
-  }
-  try {
-    if (
-      pendingApprovals.get(approvalId) !== approval || socket !== currentSocket ||
-      currentSocket.readyState !== WebSocket.OPEN || !authenticated ||
-      daemonInstanceId !== approval.daemon_instance_id || browserId !== approval.browser_id ||
-      Date.parse(approval.expires_at) <= Date.now()
-    ) throw new Error("The connection changed before the approval decision could be sent.");
-    currentSocket.send(JSON.stringify({
-      type: "approval_decision",
-      approval_id: approval.approval_id,
-      decision,
-      signature
-    }));
-  } catch (error) {
-    if (localGrantSaved) await revokeLocalApprovalGrant(approval.approval_id).catch(() => undefined);
-    throw error;
-  }
-  pendingApprovals.delete(approvalId);
-  notifyApprovalState();
-  return { ok: true };
 }
 
 function serializeError(error: unknown): ExtensionErrorPayload {
@@ -1580,39 +1011,6 @@ function serializeError(error: unknown): ExtensionErrorPayload {
     code: "extension_error",
     message: error instanceof Error ? error.message : "The browser extension could not complete the action."
   };
-}
-
-function exactWebOrigin(value: unknown): string {
-  if (typeof value !== "string" || value.length > 2048) return "";
-  try {
-    const parsed = new URL(value);
-    return (parsed.protocol === "https:" || parsed.protocol === "http:") && parsed.origin === value
-      ? parsed.origin
-      : "";
-  } catch {
-    return "";
-  }
-}
-
-function rememberLocalApprovalContext(action: BrowserAction, error: unknown, payload: Record<string, unknown>): void {
-  if (
-    !(error instanceof BridgeError) || error.code !== "approval_required" ||
-    !error.approvalFingerprint || error.targetTabId === undefined || error.targetFrameId === undefined
-  ) return;
-  const now = Date.now();
-  for (const [fingerprint, context] of localApprovalContexts) {
-    if (context.expires_at <= now) localApprovalContexts.delete(fingerprint);
-  }
-  const file = action === "attach_file" ? approvalFileIdentity(payload.file) : undefined;
-  localApprovalContexts.set(error.approvalFingerprint, {
-    action,
-    target_tab_id: error.targetTabId,
-    target_frame_id: error.targetFrameId,
-    destination_origin: exactWebOrigin(error.details?.destination_origin),
-    source_binding_fingerprint: isApprovalFingerprint(error.localTargetBinding) ? error.localTargetBinding : "",
-    expires_at: now + 30 * 60_000,
-    ...(file ? { file } : {})
-  });
 }
 
 async function handleCommand(command: CommandMessage, currentSocket: WebSocket, generation: number): Promise<void> {
@@ -1641,7 +1039,7 @@ async function handleCommand(command: CommandMessage, currentSocket: WebSocket, 
       throw new BridgeError("unsupported_action", `Unsupported browser action: ${command.action}`);
     }
     const suppliedFingerprint = isApprovalFingerprint(command.approval_fingerprint) ? command.approval_fingerprint : "";
-    const approvalSource: ApprovalSource = command.approval_source === "session" ? "session" : "extension_signed";
+    const approvalSource: ApprovalSource = "session";
     let executionPayload = command.payload;
     if (command.approved) {
       if (!APPROVAL_CONTEXT_ACTIONS.has(command.action)) {
@@ -1652,21 +1050,7 @@ async function handleCommand(command: CommandMessage, currentSocket: WebSocket, 
       const targetFrameId = command.action === "click_at" || command.action === "navigate"
         ? 0
         : frameIdFrom(command.payload);
-      if (approvalSource === "session") {
-        // No extension-signed grant exists for this authority, so the owner's
-        // opt-in and replay ledger stand in its place. The content script
-        // independently rejects any risk class that is not session-approvable.
-        await consumeSessionApproval(command.approval_id as string);
-      } else {
-        await consumeLocalApprovalGrant(
-          command.approval_id as string,
-          command.action,
-          command.payload as JsonObject,
-          suppliedFingerprint,
-          targetTabId,
-          targetFrameId
-        );
-      }
+      await consumeSessionApproval(command.approval_id as string);
       // Lock an omitted active-tab target to the exact tab whose grant was
       // consumed. A later focus change cannot redirect the approved action.
       executionPayload = { ...command.payload, tab_id: targetTabId };
@@ -1681,7 +1065,6 @@ async function handleCommand(command: CommandMessage, currentSocket: WebSocket, 
     );
     response = { type: "result", id: command.id, ok: true, result: result ?? null };
   } catch (error) {
-    if (isBrowserAction(command.action)) rememberLocalApprovalContext(command.action, error, command.payload);
     response = { type: "result", id: command.id, ok: false, error: serializeError(error) };
   }
   if (command.action === "credential_fill") scrubCredentialValues(command.payload);
@@ -1735,7 +1118,7 @@ async function sendContentCommand(
   suppliedFingerprint = "",
   revalidateOnly = false,
   retry = true,
-  approvalSource: ApprovalSource = "extension_signed"
+  approvalSource: ApprovalSource = "session"
 ): Promise<unknown> {
   try {
     const reply = await extensionBrowser.tabs.sendMessage(tabId(tab), {
@@ -1916,7 +1299,7 @@ async function executeCommandWithGuards(
   approved: boolean,
   suppliedFingerprint: string,
   revalidateOnly: boolean,
-  approvalSource: ApprovalSource = "extension_signed"
+  approvalSource: ApprovalSource = "session"
 ): Promise<unknown> {
   if ((approved || revalidateOnly) && !APPROVAL_CONTEXT_ACTIONS.has(action)) {
     throw new BridgeError(
@@ -2506,7 +1889,7 @@ async function executeCommand(
   approved: boolean,
   suppliedFingerprint: string,
   revalidateOnly: boolean,
-  approvalSource: ApprovalSource = "extension_signed"
+  approvalSource: ApprovalSource = "session"
 ): Promise<unknown> {
   if (action === "list_tabs") {
     const tabs = await extensionBrowser.tabs.query({});
@@ -2732,7 +2115,6 @@ async function uiStatus(): Promise<Record<string, unknown>> {
   } catch (error) {
     credentialStateErrorMessage = error instanceof Error ? error.message : "Credential state is unavailable.";
   }
-  pruneApprovals();
   return {
     ...publicState(),
     ...managedSummary,
@@ -2744,11 +2126,7 @@ async function uiStatus(): Promise<Record<string, unknown>> {
     active_origin: activeOrigin || null,
     credential_handoffs: credentialHandoffs,
     remote_credential_permissions: remoteCredentialPermissionViews,
-    credential_state_error: credentialStateErrorMessage || null,
-    session_approval_enabled: await sessionApprovalEnabled(),
-    approvals: [...pendingApprovals.values()]
-      .sort((left, right) => Date.parse(left.expires_at) - Date.parse(right.expires_at))
-      .map(publicApproval)
+    credential_state_error: credentialStateErrorMessage || null
   };
 }
 
@@ -2794,14 +2172,6 @@ extensionBrowser.runtime.onMessage.addListener((message: unknown, sender) => {
     if (!fromPopup && !fromOptions) return Promise.reject(new Error("Untrusted extension message sender."));
     void connect();
     return Promise.resolve({ ok: true });
-  }
-  if (record.kind === "ui:decide-approval") {
-    if (!fromPopup) return Promise.reject(new Error("Approval decisions are accepted only from the BrowseWeave popup."));
-    if (
-      typeof record.approval_id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/u.test(record.approval_id) ||
-      (record.decision !== "approve" && record.decision !== "reject")
-    ) return Promise.reject(new Error("The approval decision is invalid."));
-    return decideApproval(record.approval_id, record.decision);
   }
   if (record.kind === "ui:resume-human") {
     if (!fromPopup) return Promise.reject(new Error("Human handoff can be resumed only from the BrowseWeave popup."));
@@ -2851,18 +2221,6 @@ extensionBrowser.runtime.onMessage.addListener((message: unknown, sender) => {
     }
     return revokeRemoteCredentialPermission(record.permission_id).then(() => ({ ok: true }));
   }
-  if (record.kind === "ui:set-session-approval") {
-    // Settings-page only. If any other surface could flip this, the weaker
-    // session authority would no longer require the browser owner's consent.
-    if (!fromOptions) return Promise.reject(new Error("Session-confirmed approval can be changed only from BrowseWeave Settings."));
-    if (typeof record.enabled !== "boolean") return Promise.reject(new Error("The session-approval setting must be true or false."));
-    const enabled = record.enabled;
-    return extensionBrowser.storage.local.set({ [SESSION_APPROVAL_STORAGE_KEY]: enabled }).then(() => {
-      if (!enabled) consumedSessionApprovals.clear();
-      void extensionBrowser.runtime.sendMessage({ kind: "bridge:session-approval", enabled }).catch(() => undefined);
-      return { ok: true, enabled };
-    });
-  }
   return undefined;
 });
 
@@ -2870,19 +2228,16 @@ extensionBrowser.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && TOKEN_STORAGE_KEY in changes && !setupPairingInProgress) void connect();
 });
 
-function onApprovalTargetNavigation(details: { tabId: number; frameId: number }): void {
-  const frameIdValue = details.frameId === 0 ? undefined : details.frameId;
-  void invalidateApprovalTarget(details.tabId, frameIdValue);
+function onPageNavigation(details: { tabId: number; frameId: number }): void {
   if (details.frameId === 0) void revokeCredentialHandoffsForTab(details.tabId).catch(() => undefined);
 }
 
-extensionBrowser.webNavigation.onCommitted.addListener(onApprovalTargetNavigation);
-extensionBrowser.webNavigation.onHistoryStateUpdated.addListener(onApprovalTargetNavigation);
-extensionBrowser.webNavigation.onReferenceFragmentUpdated.addListener(onApprovalTargetNavigation);
+extensionBrowser.webNavigation.onCommitted.addListener(onPageNavigation);
+extensionBrowser.webNavigation.onHistoryStateUpdated.addListener(onPageNavigation);
+extensionBrowser.webNavigation.onReferenceFragmentUpdated.addListener(onPageNavigation);
 
 extensionBrowser.tabs.onUpdated.addListener((updatedTabId, changeInfo) => {
   if (typeof changeInfo.url !== "string") return;
-  void invalidateApprovalTarget(updatedTabId);
   void revokeCredentialHandoffsForTab(updatedTabId).catch(() => undefined);
 });
 
@@ -2898,7 +2253,6 @@ extensionBrowser.tabs.onRemoved.addListener((removedTabId) => {
   mutationStressUntil.delete(removedTabId);
   void untrackManagedTab(removedTabId).catch(() => undefined);
   void revokeCredentialHandoffsForTab(removedTabId).catch(() => undefined);
-  void invalidateApprovalTarget(removedTabId);
 });
 
 extensionBrowser.runtime.onInstalled.addListener((details) => {

@@ -6,6 +6,22 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.5] - 2026-07-29
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
+### Added
+
+- Added a focused npm-bundled BrowseWeave operating skill and automatic, idempotent installation through the explicit `setup`, `local-install`, and `mcp-add` commands. The guide is installed for Codex at `~/.agents/skills/browseweave` and Claude Code at `~/.claude/skills/browseweave`; foreign, modified, wrong-owner, or symlinked copies are preserved and fail closed. Plain npm installation remains free of lifecycle hooks.
+
+### Changed
+
+- Sensitive-action approval now happens only in the MCP client session. The extension no longer displays approve/reject cards or exposes a session-approval toggle, and the generated confirmation phrase and risk-tier opt-in were removed. All detected risk classes, including coordinate clicks and file attachment, use one explicit human decision relayed by the MCP client. Decisions remain short-lived, single-use, and bound to the exact action, parameters, file bytes when applicable, and revalidated live target.
+
+### Fixed
+
+- Fixed approved-action revalidation argument ordering so the approval source can no longer be mistaken for an approval ID while a live fingerprint is being checked.
+
 ## [0.1.0-beta.4] - 2026-07-29
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
@@ -89,7 +105,8 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.4...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.5...HEAD
+[0.1.0-beta.5]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.4...v0.1.0-beta.5
 [0.1.0-beta.4]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.3...v0.1.0-beta.4
 [0.1.0-beta.3]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.2...v0.1.0-beta.3
 [0.1.0-beta.2]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.1...v0.1.0-beta.2

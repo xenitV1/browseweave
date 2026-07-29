@@ -33,6 +33,7 @@ const requiredFiles = new Set([
   "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
   "SKILL.md",
+  "skills/browseweave/SKILL.md",
   "PRIVACY.md",
   "SECURITY.md",
   "THIRD_PARTY_NOTICES.md",
@@ -42,6 +43,7 @@ const requiredFiles = new Set([
   "extension/PRIVACY.md",
   "dist/src/setup/browser-environment.js",
   "dist/src/setup/chromium-extension-discovery.js",
+  "dist/src/setup/skill-install.js",
   "dist/src/cli.js",
   "dist/src/cli/application.js",
   "dist/src/clients/client-config.js",
@@ -187,7 +189,7 @@ function assertMetadata() {
 function allowedPackPath(filePath) {
   if ([
     "LICENSE", "README.md", "CHANGELOG.md", "SUPPORT.md", "CODE_OF_CONDUCT.md",
-    "CONTRIBUTING.md", "SKILL.md", "PRIVACY.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md",
+    "CONTRIBUTING.md", "SKILL.md", "skills/browseweave/SKILL.md", "PRIVACY.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md",
     "package.json"
   ].includes(filePath)) return true;
   if (filePath === "extension/PRIVACY.md") return true;

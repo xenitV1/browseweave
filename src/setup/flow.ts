@@ -26,9 +26,11 @@ export function shouldReuseConnectedBrowser(input: { newProfile: boolean; legacy
 
 /** Client registration is deliberately completed before any browser-owned consent flow starts. */
 export async function prepareSetupBeforeBrowserConsent(input: {
+  installSkills(): Promise<void>;
   configureClients(): Promise<void>;
   installService(): Promise<void>;
 }): Promise<void> {
+  await input.installSkills();
   await input.configureClients();
   await input.installService();
 }

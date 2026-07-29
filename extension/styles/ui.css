@@ -81,7 +81,7 @@ h2 { font-size: 17px; }
 .status-dot.connecting { background: var(--copper); box-shadow: 0 0 0 5px rgba(233, 149, 91, .13); }
 .status-dot.error { background: var(--danger-color); box-shadow: 0 0 0 5px rgba(255, 123, 121, .13); }
 
-.status-card, .settings-card, .explanation, .attention-card, .approval-section, .managed-tabs-card,
+.status-card, .settings-card, .explanation, .attention-card, .managed-tabs-card,
 .credential-card, .remote-credential-card {
   margin-top: 20px;
   border: 1px solid rgba(255,255,255,.1);
@@ -101,7 +101,6 @@ h2 { font-size: 17px; }
   background: rgba(233, 149, 91, .1);
 }
 
-.approval-section { padding: 16px; }
 .managed-tabs-card { padding: 16px; }
 .managed-tabs-card .card-copy { margin-bottom: 12px; }
 .credential-card, .remote-credential-card { padding: 16px; }
@@ -110,7 +109,7 @@ h2 { font-size: 17px; }
 .credential-fields input { margin-top: 6px; }
 .warning-note { margin: 10px 0 0; color: #f2a574; font-size: 12px; line-height: 1.45; }
 .compact-label { margin: 12px 0 6px; color: var(--muted); font-size: 12px; }
-.section-heading, .approval-card-heading {
+.section-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -132,24 +131,6 @@ h2 { font-size: 17px; }
 .card-copy { margin: 10px 0 14px; color: #c2c7d0; font-size: 13px; line-height: 1.5; }
 .mono-note { color: #aeb5c1; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; overflow-wrap: anywhere; }
 .empty-state { margin: 14px 0 0; color: #969eac; font-size: 12px; }
-.approval-list { display: grid; gap: 10px; margin-top: 12px; }
-.approval-card {
-  padding: 13px;
-  border: 1px solid rgba(255,255,255,.1);
-  border-radius: 12px;
-  background: rgba(0,0,0,.16);
-}
-.approval-card-heading strong { font-size: 13px; }
-.risk-label { color: #ffb18c; font-size: 10px; font-weight: 800; text-align: right; }
-.trusted-target { margin: 10px 0 2px; color: #91e5da; font-size: 11px; font-weight: 800; overflow-wrap: anywhere; }
-.trusted-destination { margin: 4px 0 2px; color: #ffcf9f; font-size: 11px; font-weight: 800; overflow-wrap: anywhere; }
-.trusted-target-title { margin: 0; color: #aeb5c1; font-size: 11px; overflow-wrap: anywhere; }
-.trusted-file { margin: 8px 0 2px; color: #f2c879; font-size: 11px; font-weight: 800; overflow-wrap: anywhere; }
-.untrusted-label { margin: 10px 0 4px; color: #8f98a7; font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .04em; }
-.approval-description { margin: 0; color: #d5d8de; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.expiry { margin: 8px 0 0; color: #8f98a7; font-size: 10px; }
-.approval-actions { display: flex; gap: 8px; margin-top: 11px; }
-.approval-actions button { flex: 1; }
 .permission-list { display: grid; gap: 10px; margin-top: 12px; }
 .permission-item {
   display: grid;
@@ -230,14 +211,10 @@ button:disabled { cursor: wait; opacity: .55; }
     color: var(--text);
   }
   .lead, .status-card span, .privacy-note, .explanation ul { color: #555d6b; }
-  .status-card, .settings-card, .explanation, .attention-card, .approval-section, .managed-tabs-card,
+  .status-card, .settings-card, .explanation, .attention-card, .managed-tabs-card,
   .credential-card, .remote-credential-card { border-color: rgba(10,18,32,.1); background: rgba(255,255,255,.76); }
   .attention-card { border-color: rgba(181,71,8,.25); background: rgba(255,240,229,.9); }
-  .approval-card { border-color: rgba(10,18,32,.1); background: rgba(10,18,32,.035); }
-  .card-copy, .approval-description { color: #424956; }
-  .trusted-target { color: #0f6f66; }
-  .trusted-destination { color: #a14d16; }
-  .trusted-target-title { color: #555d6b; }
+  .card-copy { color: #424956; }
   .pill { color: #0f6f66; }
   .danger-pill { color: #a52534; }
   .facts > div { border-color: rgba(10,18,32,.08); }

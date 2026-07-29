@@ -1,7 +1,7 @@
 /**
  * Per-installation identity and the non-exportable P-256 signing key that
- * authenticates this browser and signs approval decisions. The private key is
- * generated in the browser and never leaves it.
+ * authenticates this browser. The private key is generated in the browser and
+ * never leaves it.
  */
 import { INSTALLATION_ID_STORAGE_KEY, normalizeText, selectChromiumBrand } from "../shared/pure";
 import { isInstallationId, isP256PublicJwk, type BrowserIdentity, type P256PublicJwk } from "../../../src/core/protocol";

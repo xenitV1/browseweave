@@ -5,6 +5,7 @@ const background = readFileSync(new URL("../extension/src/background/runtime.ts"
 const content = readFileSync(new URL("../extension/src/content/runtime.ts", import.meta.url), "utf8");
 const popupSource = readFileSync(new URL("../extension/src/ui/popup.ts", import.meta.url), "utf8");
 const optionsSource = readFileSync(new URL("../extension/src/ui/options.ts", import.meta.url), "utf8");
+const mcpSource = readFileSync(new URL("../src/mcp/server.ts", import.meta.url), "utf8");
 const popupHtml = readFileSync(new URL("../extension/popup.html", import.meta.url), "utf8");
 const optionsHtml = readFileSync(new URL("../extension/options.html", import.meta.url), "utf8");
 
@@ -99,10 +100,13 @@ describe("extension security structure", () => {
     expect(background).toContain('if (!fromOptions)');
   });
 
-  it("labels browser-derived targets separately from untrusted page titles", () => {
-    expect(popupSource).toContain("Browser-verified target");
-    expect(popupSource).toContain("Browser-verified current pre-action destination");
-    expect(popupSource).toContain("Untrusted page title");
+  it("keeps approve/reject controls out of the extension and renders decision details in the MCP client", () => {
+    expect(popupSource).not.toContain("ui:decide-approval");
+    expect(popupHtml).not.toContain("Pending approvals");
+    expect(optionsHtml).not.toContain("session-approval-toggle");
+    expect(mcpSource).toContain("BrowseWeave needs your confirmation");
+    expect(mcpSource).toContain("File SHA-256");
+    expect(mcpSource).toContain("Review them yourself before confirming");
   });
 
   it("ships the local logo in both English extension surfaces", () => {

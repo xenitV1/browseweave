@@ -28,7 +28,7 @@ Browser content returned by a tool becomes part of the MCP result. The selected 
 
 ## Local files
 
-File attachment is off by default. When the owner enables it, BrowseWeave reads only files inside the directories listed in `policy.json`; it refuses hidden paths, multiple-hardlink aliases, known credential filenames and key formats, recognizable private-key content, and unsupported types. These checks cannot recognize every renamed or archived secret, so every upload also requires an extension-signed approval showing the exact file identity and browser-verified site. A file that is attached is uploaded to that website under its terms; BrowseWeave does not send it anywhere else. The audit log records the file's SHA-256, size, type, and a hash of its path — never the path or contents. The extension receives the basename and bytes for the single upload and does not persist them.
+File attachment is off by default. When the owner enables it, BrowseWeave reads only files inside the directories listed in `policy.json`; it refuses hidden paths, multiple-hardlink aliases, known credential filenames and key formats, recognizable private-key content, and unsupported types. These checks cannot recognize every renamed or archived secret, so every upload also requires confirmation in the MCP client showing the exact file identity and bound action details. A file that is attached is uploaded to that website under its terms; BrowseWeave does not send it anywhere else. The audit log records the file's SHA-256, size, type, and a hash of its path — never the path or contents. The extension receives the basename and bytes for the single upload and does not persist them.
 
 ## Local storage
 
@@ -38,9 +38,9 @@ File attachment is off by default. When the owner enables it, BrowseWeave reads 
 - For Zen Flatpak, the installer may add the one required native-messaging portal preference to `user.js` in exactly one active owner-controlled profile. It preserves unrelated lines and refuses ambiguous, symlinked, foreign-owned, or concurrently changed profile data. If changed, Zen must be fully restarted once before native reconnect.
 - Each extension profile stores a random installation ID and its pairing state in extension-local storage.
 - The extension stores only the IDs of tabs opened by BrowseWeave so it can enforce the 10-tab limit and close those tabs without touching the user's pre-existing tabs.
-- The extension stores its non-exportable approval-signing key in browser-managed local storage/IndexedDB.
+- The extension stores its non-exportable signing key in browser-managed local storage/IndexedDB for authenticated pairing and transport identity.
 - Browser session storage can retain up to six bounded filtered snapshots, including the returned page text, links, and controls, for delta reads. It also retains up to eight short-lived screenshot-binding metadata records for at most two minutes; screenshot image bytes are not persisted in this cache.
-- Browser session storage also holds bounded managed-tab IDs, short-lived approval/grant metadata, human-intervention origin/message metadata, and local credential-handoff origin/ref/binding metadata. Credential values are never part of this state. Session state is cleared with the browser session/extension lifecycle, subject to browser implementation.
+- Browser session storage also holds bounded managed-tab IDs, short-lived session-decision replay metadata, human-intervention origin/message metadata, and local credential-handoff origin/ref/binding metadata. Credential values are never part of this state. Session state is cleared with the browser session/extension lifecycle, subject to browser implementation.
 - If the user explicitly enables remote fallback, extension-local storage holds only a one-use permission ID, exact HTTPS origin, and creation/expiry timestamps for at most 24 hours. It holds no username or password and is deleted when consumed, revoked, or expired.
 - The audit log stores only limited metadata such as timestamp, action class, outcome, stable error code, and duration.
 
@@ -48,7 +48,7 @@ The audit log does not store typed values, passwords, one-time codes, card value
 
 ## Sensitive fields
 
-Existing values in password, one-time-code, and payment-card fields are masked in page snapshots. URL fragments are redacted to reduce accidental OAuth-code or token exposure. Sensitive actions pause before execution and require a browser-extension approval.
+Existing values in password, one-time-code, and payment-card fields are masked in page snapshots. URL fragments are redacted to reduce accidental OAuth-code or token exposure. Detected sensitive actions pause before execution and require confirmation in the MCP client session.
 
 For the recommended local credential handoff, username/password values move from the trusted extension popup directly to one bound HTTPS form and do not enter MCP, the daemon, or model context. In remote fallback, the user gives those values to the AI, so the selected MCP client and model provider can see and may retain them under their own terms. BrowseWeave clears its in-memory references after the one attempt and never logs, persists, echoes, or returns the values.
 
@@ -65,7 +65,7 @@ Private/incognito browsing is disabled by default and should remain disabled unl
 Disconnect or remove the extension to stop browser access. Remove the exact native-helper registration and per-user daemon service with:
 
 ```bash
-npx browseweave@0.1.0-beta.4 local-uninstall
+npx browseweave@0.1.0-beta.5 local-uninstall
 ```
 
 Normal uninstall preserves local configuration, state, the audit log, the private runtime, and the managed extension copy so accidental removal is recoverable.
@@ -73,7 +73,7 @@ Normal uninstall preserves local configuration, state, the audit log, the privat
 To remove the local bridge configuration, state, runtime files, legacy BrowseWeave data, and persistent managed extension copy, explicitly run:
 
 ```bash
-npx browseweave@0.1.0-beta.4 local-uninstall --purge-data
+npx browseweave@0.1.0-beta.5 local-uninstall --purge-data
 ```
 
 This destructive option removes only exact, current-user-owned BrowseWeave application directories after the service and native registration are removed. It does not remove the extension from Chrome or Zen and cannot clear browser-owned extension storage; remove the extension separately in the browser to clear that state. The Zen Flatpak native-messaging portal preference is preserved because it belongs to the user's browser profile and may be shared by a later reinstall.

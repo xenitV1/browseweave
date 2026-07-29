@@ -1,6 +1,6 @@
 {
   "name": "browseweave",
-  "version": "0.1.0-beta.4",
+  "version": "0.1.0-beta.5",
   "private": true,
   "description": "Secure local browser bridge and MCP server for AI clients",
   "license": "MIT",
@@ -47,6 +47,7 @@
     "extension/dist/**/LICENSE",
     "extension/PRIVACY.md",
     "assets/brand/*.png",
+    "skills/browseweave/SKILL.md",
     "SKILL.md",
     "PRIVACY.md",
     "SECURITY.md",

@@ -1,5 +1,7 @@
 # Proposal: session approval, file attachment, and interaction fidelity
 
+> Superseded on 2026-07-29. BrowseWeave now uses MCP-client confirmation for every detected sensitive-action class and no longer exposes extension approve/reject UI, a generated confirmation phrase, or a session-approval opt-in. This document is retained only as historical design context; current behavior is defined by `README.md` and `SECURITY.md`.
+
 Status: **implemented with a security amendment**. During review, file attachment
 was removed from session-confirmable authority: it now always requires the
 extension-owned signed approval UI. The remaining verification gates below still
