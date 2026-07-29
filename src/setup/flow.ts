@@ -180,6 +180,26 @@ async function verifyManagedExtension(directory: string): Promise<ManagedExtensi
   return marker;
 }
 
+/**
+ * Removes a managed extension copy this installation previously created, so an
+ * upgrade that relocates the folder cannot leave two enabled copies behind.
+ * Anything that is not a verified BrowseWeave copy is left untouched.
+ */
+export async function removeManagedExtensionCopy(
+  parent: string,
+  target: ManagedExtensionMarker["target"]
+): Promise<boolean> {
+  if (!path.isAbsolute(parent) || /[\0\r\n]/u.test(parent)) return false;
+  const directory = path.join(parent, target);
+  try {
+    await verifyManagedExtension(directory);
+  } catch {
+    return false;
+  }
+  await rm(directory, { recursive: true, force: true });
+  return true;
+}
+
 export async function prepareManagedExtension(input: {
   sourcePath: string;
   stableParent: string;

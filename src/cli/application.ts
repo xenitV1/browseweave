@@ -43,6 +43,7 @@ import {
 import {
   createSetupTicket,
   prepareManagedExtension,
+  removeManagedExtensionCopy,
   startSetupPageServer,
   type SetupPageServer,
   type SetupTicket,
@@ -372,6 +373,47 @@ function assertManagedSetupEnvironment(): string {
     env: process.env
   });
   return home;
+}
+
+/**
+ * Where the browser is pointed to load the unpacked extension.
+ *
+ * This is deliberately a short, visible directory in the account home rather
+ * than the runtime's data directory. Every desktop file picker hides
+ * dot-directories by default, so a path under `~/.local/share` cannot be
+ * reached without knowing an unhide shortcut — which made the one manual step
+ * of setup the hardest one. It stays owner-only and is not a download target,
+ * so the integrity story is unchanged.
+ */
+function managedExtensionParent(): string {
+  return path.join(assertManagedSetupEnvironment(), "BrowseWeave");
+}
+
+/** The pre-relocation location, cleaned up so two enabled copies cannot coexist. */
+function legacyManagedExtensionParent(): string {
+  return path.join(path.dirname(persistentRuntimeRoot()), "extension");
+}
+
+/**
+ * Best-effort reveal of the extension folder. Chrome accepts a folder dropped
+ * onto its extensions page when Developer mode is on, which skips the file
+ * picker entirely. Never fails setup: a desktop without a file manager simply
+ * follows the printed path instead.
+ */
+async function revealExtensionFolder(directory: string): Promise<void> {
+  const opener = process.platform === "linux"
+    ? "/usr/bin/xdg-open"
+    : process.platform === "darwin"
+      ? "/usr/bin/open"
+      : undefined;
+  if (opener === undefined) return;
+  try {
+    const info = await lstat(opener);
+    if (!info.isFile()) return;
+    await launchDetached(opener, [directory]);
+  } catch {
+    // A missing or unusable file manager is not a setup failure.
+  }
 }
 
 function persistentRuntimeRoot(): string {
@@ -1016,6 +1058,7 @@ async function localUninstall(purgeData = false): Promise<void> {
     runtimePaths.stateDir,
     runtimePaths.runtimeDir,
     path.dirname(persistentRuntimeRoot()),
+    managedExtensionParent(),
     ...(runtimePaths.legacyTokenPath ? [path.dirname(runtimePaths.legacyTokenPath)] : [])
   ];
   const removed = await purgeOwnedApplicationDirectories(targets);
@@ -1337,12 +1380,19 @@ async function runSetup(options: SetupOptions, originalArgs: string[]): Promise<
 
   const launcher = await detectBrowserLauncher(options.browser, options.browserPath);
   const packagedExtensionPath = await resolveExtensionPath(launcher.target);
+  const extensionTarget = launcher.target === "chrome" ? "chromium-mv3" : "firefox-mv2";
   const extensionPath = await prepareManagedExtension({
     sourcePath: packagedExtensionPath,
-    stableParent: path.join(path.dirname(persistentRuntimeRoot()), "extension"),
-    target: launcher.target === "chrome" ? "chromium-mv3" : "firefox-mv2",
+    stableParent: managedExtensionParent(),
+    target: extensionTarget,
     version: APP_VERSION
   });
+  if (await removeManagedExtensionCopy(legacyManagedExtensionParent(), extensionTarget)) {
+    process.stdout.write(
+      "BrowseWeave moved its extension folder somewhere the file picker can actually reach. " +
+      `If ${launcher.label} still lists a BrowseWeave extension from the old hidden location, remove that entry and load the folder below instead.\n`
+    );
+  }
   const requestedFamily = launcher.target === "chrome" ? "chromium" : "firefox";
   process.stdout.write(`BrowseWeave setup selected ${launcher.label}.\n`);
   await installService();
@@ -1391,6 +1441,7 @@ async function runSetup(options: SetupOptions, originalArgs: string[]): Promise<
       ) throw new Error("The daemon did not accept the exact one-click setup session.");
       if (interrupted) throw new Error("BrowseWeave setup was cancelled; no pairing key was exposed.");
       process.stdout.write(`${setupLoadInstruction(launcher, extensionPath, page.url)}\n`);
+      await revealExtensionFolder(extensionPath);
       try {
         await openSetupBrowser(launcher, page.url);
       } catch (error) {

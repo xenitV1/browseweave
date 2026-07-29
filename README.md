@@ -129,7 +129,7 @@ This is a **guided one-command setup**, not a silent browser-extension install. 
 
 1. installs and verifies a persistent per-user runtime, background service, and narrow native reconnect helper without `sudo`;
 2. opens the selected browser's extension-management screen and a private loopback setup page;
-3. reveals the exact managed extension folder or manifest while the user completes the browser-required load;
+3. reveals the exact managed extension folder or manifest, in a short visible directory under your home folder, and opens it in your file manager while you complete the browser-required load;
 4. waits for the user to return to the private setup page and select **Connect this browser**—not the extension Settings button—for initial enrollment;
 5. exchanges a short-lived setup capability between that page, the extension, and the local daemon without displaying a pairing key;
 6. verifies that the extension stored the credential and completed a normal authenticated reconnect;
@@ -166,10 +166,12 @@ Then return to settings and select **Connect BrowseWeave** again. Do not install
 
 ### Required browser approval
 
+Setup keeps the unpacked extension in `BrowseWeave` inside your home folder — `BrowseWeave/chromium-mv3` for Chrome and `BrowseWeave/firefox-mv2` for Zen — and opens that folder in your file manager. It deliberately does not live under a hidden directory such as `~/.local/share`, because desktop file pickers do not show those without an unhide shortcut.
+
 Chrome requires these user actions:
 
 1. Turn on **Developer mode** in `chrome://extensions`.
-2. Select **Load unpacked**.
+2. Select **Load unpacked**, or simply drag the opened folder onto the `chrome://extensions` page.
 3. Choose the folder opened or printed by setup.
 
 Zen requires these user actions:

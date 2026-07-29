@@ -83,14 +83,14 @@ For Chrome:
 
 1. Open `chrome://extensions` if setup could not open it.
 2. Turn on **Developer mode**.
-3. Select **Load unpacked**.
-4. Choose the exact folder revealed by setup.
+3. Select **Load unpacked**, or drag the folder setup opened in the file manager onto the page.
+4. Choose the exact folder revealed by setup. It is `BrowseWeave/chromium-mv3` in the human's home folder, not a hidden directory.
 
 For Zen:
 
 1. Open `about:debugging#/runtime/this-firefox` if setup could not open it.
 2. Select **Load Temporary Add-on**.
-3. Choose `manifest.json` in the exact folder revealed by setup.
+3. Choose `manifest.json` in the exact folder revealed by setup, which is `BrowseWeave/firefox-mv2` in the human's home folder.
 
 After loading the extension, tell the human to return to the private loopback setup page opened by the installer and select **Connect this browser**. Do not send them to extension Settings for initial enrollment, and do not click for them. Wait until the terminal prints **BrowseWeave setup is complete**.
 
