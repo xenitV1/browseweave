@@ -57,6 +57,7 @@ describe("fixed npm release archive verification", () => {
       "SUPPORT.md",
       "CODE_OF_CONDUCT.md",
       "CONTRIBUTING.md",
+      "skills/browseweave/SKILL.md",
       "dist/src/setup/chromium-extension-discovery.js",
       "dist/src/cli/application.js",
       "dist/src/core/entrypoint.js",

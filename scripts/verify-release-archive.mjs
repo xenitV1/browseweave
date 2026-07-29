@@ -15,6 +15,7 @@ const requiredFiles = new Set([
   "SUPPORT.md",
   "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
+  "skills/browseweave/SKILL.md",
   "SKILL.md",
   "PRIVACY.md",
   "SECURITY.md",
@@ -152,6 +153,7 @@ function allowedPath(file) {
   if ([
     "LICENSE", "README.md", "CHANGELOG.md", "SUPPORT.md", "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md", "PRIVACY.md", "SECURITY.md", "SKILL.md", "THIRD_PARTY_NOTICES.md",
+    "skills/browseweave/SKILL.md",
     "package.json"
   ].includes(file)) return true;
   if (file === "extension/PRIVACY.md") return true;
