@@ -12,6 +12,7 @@ import {
   compactSelectOptions,
   diffSnapshots,
   externalNavigationRisk,
+  fillBatchKeystrokeIntervalMs,
   isStableRef,
   isApprovalFingerprint,
   isMeaningfulPlainText,
@@ -461,12 +462,20 @@ describe("BrowseWeave extension pure safety functions", () => {
     for (const distance of [1, 120, 700, -700, 5_000, -12_345]) {
       const steps = scrollStepDeltas(distance);
       expect(steps.length).toBeGreaterThanOrEqual(1);
-      expect(steps.length).toBeLessThanOrEqual(8);
       expect(steps.reduce((total, step) => total + step, 0)).toBe(distance);
       expect(steps.every((step) => Number.isInteger(step))).toBe(true);
       expect(steps.every((step) => distance > 0 ? step >= 0 : step <= 0)).toBe(true);
+      expect(steps.every((step) => Math.abs(step) <= 360)).toBe(true);
     }
     expect(scrollStepDeltas(100).length).toBe(1);
+  });
+
+  it("shares one bounded typing budget across a large form batch", () => {
+    const lengths = new Array<number>(25).fill(51);
+    const interval = fillBatchKeystrokeIntervalMs(lengths);
+    expect(interval).toBeGreaterThan(0);
+    expect(interval * lengths.reduce((sum, length) => sum + length - 1, 0)).toBeLessThanOrEqual(10_000);
+    expect(fillBatchKeystrokeIntervalMs([10_000, 10_000])).toBe(0);
   });
 
   it("ends every pointer approach path exactly on the target", () => {
@@ -488,6 +497,8 @@ describe("BrowseWeave extension pure safety functions", () => {
     expect(mutationIntervalMs({ action: "click" })).toBe(MUTATION_INTERVAL_COMMITTING_MS);
     expect(mutationIntervalMs({ action: "navigate" })).toBe(MUTATION_INTERVAL_COMMITTING_MS);
     expect(mutationIntervalMs({ action: "press", key: "Enter" })).toBe(MUTATION_INTERVAL_COMMITTING_MS);
+    expect(mutationIntervalMs({ action: "press", key: " " })).toBe(MUTATION_INTERVAL_COMMITTING_MS);
+    expect(mutationIntervalMs({ action: "press", key: "Space" })).toBe(MUTATION_INTERVAL_COMMITTING_MS);
     // Stress outranks every other classification.
     expect(mutationIntervalMs({ action: "type", stressed: true })).toBe(MUTATION_INTERVAL_STRESSED_MS);
     expect(mutationIntervalMs({ action: "click", stressed: true })).toBe(MUTATION_INTERVAL_STRESSED_MS);

@@ -19,6 +19,7 @@ The extension-to-daemon connection is local, but MCP results do not necessarily 
 - visible-tab screenshots when explicitly requested;
 - click, type, key, hover, scroll, form, and navigation actions;
 - values the user asks the AI client to enter.
+- the basename, MIME type, size, hash, and bytes of a local file the user explicitly approved for one upload.
 
 Password, one-time-code, and payment-card values are masked in snapshots. URL fragments are redacted. Typed values may pass through extension memory to complete the requested action but are not saved in the audit log.
 
@@ -46,4 +47,4 @@ Broad host access, tabs, navigation, storage, Chromium scripting, and native-mes
 
 Private/incognito access is disabled by default. Browser UI, privileged pages, extension stores, file pickers, operating-system dialogs, CAPTCHA, WebAuthn, and hardware security-key prompts remain outside automated control.
 
-Sensitive actions require a signed decision from the extension's own approval UI. No MCP command can manufacture that decision.
+File attachment, payments, deletion, credentials, two-factor codes, account-security changes, and coordinate clicks require a signed decision from the extension's own approval UI. If the owner separately enables the weaker session-confirmation feature in both policy and Settings, only form submissions, message/publish actions, and off-site navigation may instead be confirmed in the AI client. No MCP command can manufacture an extension-signed decision.

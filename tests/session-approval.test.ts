@@ -114,6 +114,13 @@ describe("session approval policy file", () => {
     await expect(loadSessionApprovalPolicy(directory)).rejects.toThrow(/may contain only/);
   });
 
+  it("never lets the AI session authorize a local-file upload", async () => {
+    const directory = await policyDirectory(
+      JSON.stringify({ session_approval: { enabled: true, risks: ["file_attach"] } })
+    );
+    await expect(loadSessionApprovalPolicy(directory)).rejects.toThrow(/may contain only/);
+  });
+
   it("fails closed on an invalid or damaged policy rather than falling back", async () => {
     const broken = await policyDirectory("{ not json");
     await expect(loadSessionApprovalPolicy(broken)).rejects.toThrow(/not valid JSON/);

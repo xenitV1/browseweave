@@ -26,7 +26,7 @@ The MCP transport is client-neutral. Automatic configuration is currently implem
 - Attach a local file to a page's file input, if the user has allowed its directory, without opening the operating-system file picker.
 - Connect more than one browser profile without mixing their tab IDs or approval keys.
 
-Attaching a file sends it from the computer to a website, so it is off by default, always requires explicit human confirmation, and only reads from directories the user listed in an owner-only `policy.json`. Hidden files and directories — which covers `.ssh`, `.gnupg`, `.aws`, `.env`, and `.npmrc` — key and credential material, and unsupported file types are never attachable, even inside an allowed directory.
+Attaching a file sends it from the computer to a website, so it is off by default, always requires an extension-signed human confirmation showing the exact basename, size, MIME type, SHA-256, and browser-verified site, and only reads from directories the user listed in an owner-only `policy.json`. Hidden paths, multiple-hardlink aliases, known credential filenames and key formats, private-key content, unsupported file types, and BrowseWeave's own state are refused. A denylist cannot recognize every renamed or archived secret, so the path allowlist and exact-file approval remain mandatory.
 
 ```json
 { "file_attach": { "enabled": true, "allowed_directories": ["/absolute/path/to/Documents"] } }
@@ -130,7 +130,7 @@ only when the same browser family is already connected and you intentionally
 want to pair another profile. All-browser mode covers browser applications, not
 every profile inside them.
 
-Repeat `--client` to configure any requested combination of `codex`, `claude-code`, `cursor`, and `opencode`. If no client is specified, setup attempts every supported client it detects; explicit flags are safer. BrowseWeave preserves unrelated configuration and stops rather than overwriting an ambiguous or foreign `browseweave` entry. For another local stdio MCP client, print a generic entry and adapt it manually to that client's current official schema:
+Repeat `--client` to configure any requested combination of `codex`, `claude-code`, `cursor`, and `opencode`. If no client is specified, setup attempts every supported client it detects; explicit flags are safer. Client registration is completed before browser enrollment and launches a trusted npm invocation of `browseweave@latest`. BrowseWeave may replace only an exact older entry from its verified persistent runtime; it preserves unrelated configuration and stops rather than overwriting an ambiguous or foreign `browseweave` entry. For another local stdio MCP client, print a generic entry and adapt it manually to that client's current official schema:
 
 ```bash
 npx browseweave@0.1.0-beta.2 mcp-config generic
@@ -149,14 +149,14 @@ This is a **guided one-command setup**, not a silent browser-extension install. 
 all-browser mode the browser-specific steps repeat sequentially, while runtime,
 service, and MCP configuration remain shared. The command:
 
-1. installs and verifies a persistent per-user runtime, background service, and narrow native reconnect helper without `sudo`;
-2. opens each selected browser's extension-management screen and a private loopback setup page;
-3. reveals the exact managed extension folder or manifest, in a short visible directory under your home folder, and opens it in your file manager while you complete the browser-required load;
-4. waits for the user to return to the private setup page and select **Connect this browser**—not the extension Settings button—for initial enrollment;
-5. exchanges a short-lived setup capability between that page, the extension, and the local daemon without displaying a pairing key;
-6. verifies that the extension stored the credential and completed a normal authenticated reconnect;
-7. after Chrome has saved the unpacked extension, discovers only the single enabled byte-exact BrowseWeave identity and registers that exact `chrome-extension://<id>/` origin; and
-8. registers each selected MCP client against the persistent runtime.
+1. registers every selected MCP client to a trusted `browseweave@latest` npm invocation before browser-owned consent begins;
+2. installs and verifies the persistent per-user runtime, background service, and narrow native reconnect helper without `sudo`;
+3. opens each selected browser's extension-management screen and a private loopback setup page;
+4. reveals the exact managed extension folder or manifest, in a short visible directory under your home folder, and opens it in your file manager while you complete the browser-required load;
+5. waits for the user to return to the private setup page and select **Connect this browser**—not the extension Settings button—for initial enrollment;
+6. exchanges a short-lived setup capability between that page, the extension, and the local daemon without displaying a pairing key;
+7. verifies that the extension stored the credential and completed a normal authenticated reconnect; and
+8. after Chrome has saved the unpacked extension, discovers only the single enabled byte-exact BrowseWeave identity and registers that exact `chrome-extension://<id>/` origin.
 
 The extension Settings button labeled **Connect BrowseWeave** is a later repair/reconnect path through native messaging. It is not the initial guided-setup button.
 

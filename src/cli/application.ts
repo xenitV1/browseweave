@@ -2,7 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { constants as fsConstants, type FileHandle, access, chmod, link, lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm } from "node:fs/promises";
+import { constants as fsConstants, type FileHandle, access, chmod, link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,7 +43,9 @@ import {
 import {
   createSetupTicket,
   prepareManagedExtension,
+  prepareSetupBeforeBrowserConsent,
   removeManagedExtensionCopy,
+  shouldReuseConnectedBrowser,
   startSetupPageServer,
   type SetupPageServer,
   type SetupTicket,
@@ -447,6 +449,39 @@ function persistentRuntimeRoot(): string {
     throw new Error("XDG_DATA_HOME is not a safe absolute directory.");
   }
   return path.join(dataHome, "browseweave", "runtime");
+}
+
+/** Exact older BrowseWeave package entries that setup may safely replace with @latest. */
+async function installedRuntimeMcpLaunchSpecs(): Promise<McpLaunchSpec[]> {
+  const root = persistentRuntimeRoot();
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const specs: McpLaunchSpec[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(entry.name)) continue;
+    try {
+      const packageDirectory = path.join(root, entry.name, "node_modules", "browseweave");
+      const metadataPath = path.join(packageDirectory, "package.json");
+      const mcpPath = path.join(packageDirectory, "dist", "src", "mcp.js");
+      const [metadataInfo, mcpInfo] = await Promise.all([lstat(metadataPath), lstat(mcpPath)]);
+      if (
+        !metadataInfo.isFile() || metadataInfo.isSymbolicLink() ||
+        !mcpInfo.isFile() || mcpInfo.isSymbolicLink() ||
+        (typeof process.getuid === "function" && (metadataInfo.uid !== process.getuid() || mcpInfo.uid !== process.getuid()))
+      ) continue;
+      const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Record<string, unknown>;
+      if (metadata.name !== "browseweave" || metadata.version !== entry.name) continue;
+      specs.push({ command: process.execPath, args: [mcpPath], env: {} });
+    } catch {
+      // A damaged or foreign runtime directory is never treated as replaceable.
+    }
+  }
+  return specs;
 }
 
 async function exactRuntimeCliPath(versionDirectory: string): Promise<string> {
@@ -1184,15 +1219,34 @@ async function claudeState(spec: McpLaunchSpec, allowMissing: boolean): Promise<
   return state;
 }
 
-async function addCliManagedClient(client: "codex" | "claude-code", spec: McpLaunchSpec): Promise<"added" | "unchanged"> {
+async function addCliManagedClient(
+  client: "codex" | "claude-code",
+  spec: McpLaunchSpec,
+  replaceableSpecs: readonly McpLaunchSpec[]
+): Promise<"added" | "updated" | "unchanged"> {
   const command: ClientExecutableName = client === "codex" ? "codex" : "claude";
   const executable = await availableClientExecutable(command);
   if (!executable) {
     throw new Error(`${command} is not installed or no trusted executable was found on the safe user PATH.`);
   }
-  const before = client === "codex" ? await codexState(spec, executable) : await claudeState(spec, true);
+  let replaced = false;
+  let before = client === "codex" ? await codexState(spec, executable) : await claudeState(spec, true);
   if (before === "foreign") {
-    throw new Error(`${client} already contains a foreign browseweave MCP entry; it was not changed.`);
+    const replaceable = await Promise.all(replaceableSpecs.map(async (candidate) => (
+      client === "codex" ? codexState(candidate, executable) : claudeState(candidate, true)
+    )));
+    if (!replaceable.includes("exact")) {
+      throw new Error(`${client} already contains a foreign browseweave MCP entry; it was not changed.`);
+    }
+    const removeArgs = client === "codex"
+      ? ["mcp", "remove", "browseweave"]
+      : ["mcp", "remove", "browseweave", "--scope", "user"];
+    if (await runTrustedClientCommand(executable, removeArgs) !== 0) {
+      throw new Error(`${client} could not remove its verified older BrowseWeave MCP registration.`);
+    }
+    before = client === "codex" ? await codexState(spec, executable) : await claudeState(spec, true);
+    if (before !== "absent") throw new Error(`${client} did not remove its verified older BrowseWeave MCP registration.`);
+    replaced = true;
   }
   if (before === "exact") return "unchanged";
 
@@ -1206,7 +1260,7 @@ async function addCliManagedClient(client: "codex" | "claude-code", spec: McpLau
   if (after !== "exact") {
     throw new Error(`${client} reported success but its BrowseWeave MCP registration did not match the expected executable and arguments.`);
   }
-  return "added";
+  return replaced ? "updated" : "added";
 }
 
 function cursorConfigPath(): string {
@@ -1249,22 +1303,23 @@ async function resolveInstalledOpenCodeVersion(requestedVersion?: 1 | 2): Promis
 }
 
 async function addMcpClient(client: SupportedMcpClient, requestedOpenCodeVersion?: 1 | 2): Promise<void> {
-  const spec = defaultMcpLaunchSpec();
+  const spec = await defaultMcpLaunchSpec();
   if (client === "generic") {
     throw new Error("Generic clients cannot be edited safely without their exact schema. Use 'browseweave mcp-config generic', review the output, and adapt its command/args entry to the client's official MCP format.");
   }
+  const replaceableSpecs = await installedRuntimeMcpLaunchSpecs();
   if (client === "codex" || client === "claude-code") {
-    const status = await addCliManagedClient(client, spec);
+    const status = await addCliManagedClient(client, spec, replaceableSpecs);
     process.stdout.write(`BrowseWeave MCP registration for ${client}: ${status}. Start a new client session, then call browser_status.\n`);
     return;
   }
   if (client === "cursor") {
-    const result = await mergeCursorConfig(cursorConfigPath(), spec);
+    const result = await mergeCursorConfig(cursorConfigPath(), spec, replaceableSpecs);
     process.stdout.write(`BrowseWeave Cursor MCP configuration: ${result.status} (${result.path}).\n`);
     return;
   }
   const version = await resolveInstalledOpenCodeVersion(requestedOpenCodeVersion);
-  const result = await mergeOpenCodeConfig(await openCodeConfigPath(), spec, version);
+  const result = await mergeOpenCodeConfig(await openCodeConfigPath(), spec, version, replaceableSpecs);
   process.stdout.write(`BrowseWeave OpenCode V${result.opencodeVersion} MCP configuration: ${result.status} (${result.path}).\n`);
 }
 
@@ -1327,7 +1382,7 @@ async function configureSetupClients(
     }
   }
   if (failures.length > 0) {
-    throw new Error(`Browser setup succeeded, but these MCP registrations need attention: ${failures.join("; ")}`);
+    throw new Error(`MCP registration failed before browser setup started: ${failures.join("; ")}`);
   }
 }
 
@@ -1399,7 +1454,8 @@ async function setupBrowser(input: {
     target: extensionTarget,
     version: APP_VERSION
   });
-  if (await removeManagedExtensionCopy(legacyManagedExtensionParent(), extensionTarget)) {
+  const legacyCopyRemoved = await removeManagedExtensionCopy(legacyManagedExtensionParent(), extensionTarget);
+  if (legacyCopyRemoved) {
     process.stdout.write(
       "BrowseWeave moved its extension folder somewhere the file picker can actually reach. " +
       `If ${launcher.label} still lists a BrowseWeave extension from the old hidden location, remove that entry and load the folder below instead.\n`
@@ -1407,11 +1463,11 @@ async function setupBrowser(input: {
   }
   const requestedFamily = launcher.target === "chrome" ? "chromium" : "firefox";
   process.stdout.write(`BrowseWeave setup selected ${launcher.label}.\n`);
-  const alreadyConnected = input.newProfile
-    ? undefined
-    : input.baseline.find((browser) =>
+  const alreadyConnected = shouldReuseConnectedBrowser({ newProfile: input.newProfile, legacyCopyRemoved })
+    ? input.baseline.find((browser) =>
       browser.browser_family === requestedFamily && browser.extension_version === APP_VERSION
-    );
+    )
+    : undefined;
   let selectedBrowser: SetupBrowserStatus | undefined = alreadyConnected;
   if (alreadyConnected) {
     process.stdout.write(`${launcher.label} is already connected (${alreadyConnected.browser_id}).\n`);
@@ -1573,7 +1629,10 @@ async function runSetup(options: SetupOptions, originalArgs: string[]): Promise<
     );
   }
 
-  await installService();
+  await prepareSetupBeforeBrowserConsent({
+    configureClients: async () => configureSetupClients(setupClients, setupOpenCodeVersion),
+    installService
+  });
   const baseline = await daemonBrowsersWithRetry();
   const selectedBrowsers: SetupBrowserStatus[] = [];
   for (let index = 0; index < launchers.length; index += 1) {
@@ -1587,7 +1646,6 @@ async function runSetup(options: SetupOptions, originalArgs: string[]): Promise<
     }));
   }
 
-  await configureSetupClients(setupClients, setupOpenCodeVersion);
   const connected = await daemonBrowsersWithRetry(5_000);
   for (const selectedBrowser of selectedBrowsers) {
     if (!connected.some((browser) =>
@@ -1672,7 +1730,7 @@ export async function main(): Promise<void> {
     const client = parseClient(arg);
     const version = client === "opencode" ? openCodeVersionFlag(rest, true) : undefined;
     if (client !== "opencode" && rest.length > 0) throw new Error(`Unexpected option: ${rest[0]}`);
-    process.stdout.write(serializeClientSetup(clientSetup(client, undefined, version)));
+    process.stdout.write(serializeClientSetup(clientSetup(client, await defaultMcpLaunchSpec(), version)));
     return;
   }
   if (command === "mcp-add") {

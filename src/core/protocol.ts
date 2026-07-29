@@ -10,6 +10,8 @@ export const SHA256_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 export const INSTALLATION_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 export const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/u;
 export const SETUP_ID_PATTERN = /^[a-f0-9]{24}$/u;
+/** Base64 expansion of the 8 MiB attachment cap plus command-envelope headroom. */
+export const MAX_EXTENSION_INCOMING_MESSAGE_BYTES = 12 * 1024 * 1024;
 
 export const BROWSER_ACTIONS = [
   "list_tabs",
@@ -56,7 +58,7 @@ export type ApprovalSource = "extension_signed" | "session";
  * semantic-free coordinate click — always requires the extension-signed
  * decision. Both the daemon and the extension read this one list.
  */
-export const SESSION_APPROVABLE_RISKS = ["form_submit", "message", "external_navigation", "file_attach"] as const;
+export const SESSION_APPROVABLE_RISKS = ["form_submit", "message", "external_navigation"] as const;
 
 export type SessionApprovableRisk = (typeof SESSION_APPROVABLE_RISKS)[number];
 
@@ -254,6 +256,14 @@ export interface ExtensionApprovedCommand extends ExtensionCommandBase {
 
 export type ExtensionCommand = ExtensionUnapprovedCommand | ExtensionApprovedCommand;
 
+/** Exact local-file identity shown by the trusted extension approval UI. */
+export interface ApprovalFileIdentity extends JsonObject {
+  name: string;
+  mime_type: string;
+  sha256: string;
+  size: number;
+}
+
 export interface ExtensionApprovalRequest {
   type: "approval_request";
   approval_id: string;
@@ -269,6 +279,8 @@ export interface ExtensionApprovalRequest {
   params_sha256: string;
   approval_fingerprint: string;
   expires_at: string;
+  /** Required only for attach_file; derived from the exact bytes in params_sha256. */
+  file?: ApprovalFileIdentity;
 }
 
 export interface ExtensionApprovalResolved {

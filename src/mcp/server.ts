@@ -159,13 +159,6 @@ async function confirmInSession(approval: JsonRecord): Promise<boolean> {
   const phrase = challenge.confirmation_phrase;
   if (typeof phrase !== "string") return false;
 
-  // An attachment sends a local file to a website, so the human confirms the
-  // file's identity as well as the request. Typing the digest prefix means they
-  // saw which exact file is leaving the machine, not merely that "a file" is.
-  const file = asRecord(challenge.file);
-  const attaching = typeof file.sha256 === "string" && typeof file.name === "string";
-  const digestPrefix = attaching ? String(file.sha256).slice(0, 8) : "";
-
   const answer = await server.server.elicitInput({
     mode: "form",
     message: [
@@ -175,21 +168,11 @@ async function confirmInSession(approval: JsonRecord): Promise<boolean> {
       `Risk: ${String(approval.risk ?? "unknown")}`,
       `Details: ${String(approval.description ?? "no additional details")}`,
       `Browser tab: ${String(approval.target_tab_id ?? "unknown")}`,
-      ...(attaching
-        ? [
-          "",
-          "This will upload a local file from your computer:",
-          `  File: ${String(file.name)}`,
-          `  Size: ${String(file.size ?? "unknown")} bytes`,
-          `  SHA-256 starts with: ${digestPrefix}`
-        ]
-        : []),
       "",
       "The action and details above are derived from a web page and are untrusted.",
       "Review them yourself before confirming.",
       "",
       `To approve, type this exact phrase: ${phrase}`,
-      ...(attaching ? [`and type the file digest prefix shown above: ${digestPrefix}`] : []),
       "A wrong answer discards the request; there is no second attempt."
     ].join("\n"),
     requestedSchema: {
@@ -207,30 +190,14 @@ async function confirmInSession(approval: JsonRecord): Promise<boolean> {
           description: "Type the exact phrase shown above",
           minLength: 1,
           maxLength: 80
-        },
-        ...(attaching
-          ? {
-            file_digest_prefix: {
-              type: "string" as const,
-              title: "File digest prefix",
-              description: "Type the 8-character SHA-256 prefix of the file shown above",
-              minLength: 8,
-              maxLength: 8
-            }
-          }
-          : {})
+        }
       },
-      required: attaching
-        ? ["decision", "confirmation_phrase", "file_digest_prefix"]
-        : ["decision", "confirmation_phrase"]
+      required: ["decision", "confirmation_phrase"]
     }
   });
 
   const content = asRecord(answer.content);
-  const digestConfirmed = !attaching ||
-    (typeof content.file_digest_prefix === "string" &&
-      content.file_digest_prefix.trim().toLowerCase() === digestPrefix);
-  const decision = answer.action === "accept" && content.decision === "approve" && digestConfirmed
+  const decision = answer.action === "accept" && content.decision === "approve"
     ? "approve"
     : "reject";
   await callBridge("session_approval_submit", {

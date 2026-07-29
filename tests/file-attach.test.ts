@@ -1,16 +1,18 @@
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DISABLED_FILE_ATTACH_POLICY,
   FileAttachError,
+  MAX_ALLOWED_FILE_BYTES,
   attachedFileFacts,
   auditPathDigest,
   loadFileAttachPolicy,
   readAttachableFile,
   type FileAttachPolicy
 } from "../src/daemon/file-attach.js";
+import { MAX_EXTENSION_INCOMING_MESSAGE_BYTES } from "../src/core/protocol.js";
 import { policyPath } from "../src/daemon/policy.js";
 
 const roots: string[] = [];
@@ -34,7 +36,6 @@ function policyFor(directory: string, overrides: Partial<FileAttachPolicy> = {})
     enabled: true,
     allowedDirectories: [directory],
     maxFileBytes: 1024 * 1024,
-    maxFilesPerCommand: 1,
     allowedExtensions: new Set<string>(),
     ...overrides
   };
@@ -77,6 +78,15 @@ describe("file attach policy", () => {
       allowed_extensions: ["exe"]
     });
     await expect(loadFileAttachPolicy(unknownType)).rejects.toThrow(/unsupported file type/);
+  });
+
+  it("rejects a multi-file policy because one command can attach only one file", async () => {
+    const configDir = await writePolicy(await makeRoot(), {
+      enabled: true,
+      allowed_directories: ["/tmp"],
+      max_files_per_command: 2
+    });
+    await expect(loadFileAttachPolicy(configDir)).rejects.toThrow(/must be exactly 1/);
   });
 });
 
@@ -177,6 +187,18 @@ describe("attachable file reading", () => {
       .rejects.toThrow(/outside every directory/);
   });
 
+  it.runIf(process.platform !== "win32")("refuses hardlinks so an allowed alias cannot hide a denied or outside file", async () => {
+    const allowed = await makeRoot();
+    const elsewhere = await makeRoot();
+    const secret = path.join(elsewhere, ".env");
+    const alias = path.join(allowed, "report.txt");
+    await writeFile(secret, "API_TOKEN=secret");
+    await link(secret, alias);
+
+    await expect(readAttachableFile(alias, policyFor(allowed)))
+      .rejects.toThrow(/hardlink|multiple filesystem names/iu);
+  });
+
   it.runIf(process.platform !== "win32")("canonicalises an allowed directory before comparing a resolved file", async () => {
     const actual = await makeRoot();
     const aliasParent = await makeRoot();
@@ -197,6 +219,17 @@ describe("attachable file reading", () => {
       .rejects.toThrow(/key or credential material/);
   });
 
+  it("refuses common credential filenames and private-key content under an ordinary text name", async () => {
+    const root = await makeRoot();
+    await writeFile(path.join(root, "credentials.json"), "{}");
+    await expect(readAttachableFile(path.join(root, "credentials.json"), policyFor(root)))
+      .rejects.toThrow(/key or credential material/iu);
+
+    await writeFile(path.join(root, "notes.txt"), "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n");
+    await expect(readAttachableFile(path.join(root, "notes.txt"), policyFor(root)))
+      .rejects.toThrow(/private-key material/iu);
+  });
+
   it("refuses a directory and a missing path", async () => {
     const root = await makeRoot();
     await mkdir(path.join(root, "folder.txt"), { recursive: true });
@@ -215,24 +248,38 @@ describe("attachable file reading", () => {
 });
 
 describe("attachment audit and confirmation facts", () => {
+  it("fits the largest policy-approved file inside the extension transport ceiling", () => {
+    const serialized = JSON.stringify({
+      type: "command",
+      action: "attach_file",
+      payload: { file: { name: "largest.bin", base64: Buffer.alloc(MAX_ALLOWED_FILE_BYTES).toString("base64") } }
+    });
+    expect(Buffer.byteLength(serialized, "utf8")).toBeLessThan(MAX_EXTENSION_INCOMING_MESSAGE_BYTES);
+  });
+
   it("digests the path instead of recording it", () => {
     const digest = auditPathDigest("/home/user/Documents/report.pdf");
-    expect(digest).toMatch(/^[a-f0-9]{16}$/u);
+    expect(digest).toMatch(/^[a-f0-9]{64}$/u);
     expect(digest).not.toContain("report");
     expect(auditPathDigest("/home/user/Documents/report.pdf")).toBe(digest);
     expect(auditPathDigest("/home/user/Documents/other.pdf")).not.toBe(digest);
   });
 
   it("surfaces file identity only for attachment parameters", () => {
-    expect(attachedFileFacts({ file: { name: "a.pdf", sha256: "ab".repeat(32), size: 10, base64: "eA==" } }))
-      .toEqual({ file: { name: "a.pdf", sha256: "ab".repeat(32), size: 10 } });
+    expect(attachedFileFacts({
+      file: { name: "a.pdf", mime_type: "application/pdf", sha256: "ab".repeat(32), size: 10, base64: "eA==" }
+    })).toEqual({
+      file: { name: "a.pdf", mime_type: "application/pdf", sha256: "ab".repeat(32), size: 10 }
+    });
     expect(attachedFileFacts({ ref: "bw-1" })).toBeUndefined();
     expect(attachedFileFacts(undefined)).toBeUndefined();
     expect(attachedFileFacts({ file: "not-an-object" })).toBeUndefined();
   });
 
   it("does not carry file bytes into the confirmation facts", () => {
-    const facts = attachedFileFacts({ file: { name: "a.pdf", sha256: "cd".repeat(32), size: 4, base64: "SEVMTA==" } });
+    const facts = attachedFileFacts({
+      file: { name: "a.pdf", mime_type: "application/pdf", sha256: "cd".repeat(32), size: 4, base64: "SEVMTA==" }
+    });
     expect(JSON.stringify(facts)).not.toContain("SEVMTA==");
   });
 });

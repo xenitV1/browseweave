@@ -75,15 +75,15 @@ Risk detection is a defense layer, not a complete understanding of every site. C
 
 File attachment is the only capability that reads something outside a web page, so it is a genuinely new class of reach for BrowseWeave: without controls it would be a local-file exfiltration primitive, where an injected instruction could upload a private file to a hostile origin. It is **off by default**.
 
-Because attachment is session-approvable, the human confirming it may not be at the browser. The path policy — not an approval screen — is therefore the primary defence:
+Attachment is never session-approvable. It requires the extension-owned, signed approval UI, and the path policy independently limits which local files can even reach that prompt:
 
 - **Default deny.** With no `policy.json`, nothing is attachable. Enabling it requires listing absolute directories in an owner-only file that no MCP tool can write.
-- **Never attachable, even inside an allowed directory:** any path with a segment beginning with a dot, which covers `.ssh`, `.gnupg`, `.aws`, `.env`, and `.npmrc`; key and credential material such as `.pem`, `.key`, `.p12`, `id_rsa`, keychains, and wallet or seed files; unsupported file types; and BrowseWeave's own configuration, state, and runtime directories.
-- **Symlinks resolved before deciding,** with both the written path and the resolved path checked, so a link cannot reach outside the allowlist or hide a denied name behind an innocent one.
+- **Refused even inside an allowed directory:** any hidden path segment, which covers `.ssh`, `.gnupg`, `.aws`, `.env`, and `.npmrc`; multiple-hardlink aliases; known credential filenames and key formats; recognizable private-key content; unsupported file types; and BrowseWeave's own configuration, state, and runtime directories. A renamed or archived secret cannot be identified perfectly, which is why exact-file approval is still mandatory.
+- **Links fail closed.** Symlinks are resolved and checked against both path lists; files with more than one hardlink are refused so an innocent allowed alias cannot hide a denied or outside inode.
 - **Owner and handle checks.** Only regular files owned by the current user are read, opened with `O_NOFOLLOW`, and the device and inode are re-verified through the open handle so the path cannot be swapped between the check and the read.
 - **Size and type caps** from the policy, bounded by the transport ceiling.
 
-Approval is unconditional — attachment is never left to the risk heuristics, in the same way a semantic-free coordinate click is not. The file's bytes are part of the approval's parameter identity, so a retry with a changed file cannot reuse the approval the human gave; it produces a fresh approval instead. When confirmed in-session, the human must type both the confirmation phrase and the file's SHA-256 prefix, so the answer attests to the exact file, not merely to "a file".
+Approval is unconditional — attachment is never left to the risk heuristics, in the same way a semantic-free coordinate click is not. The extension popup shows the exact basename, byte size, MIME type, full SHA-256, and browser-verified site. Its signed one-use decision covers the canonical parameter hash, which includes the file bytes; a changed file cannot reuse the approval and produces a fresh prompt.
 
 The absolute path never reaches the browser; only the basename and bytes do. The audit log records the digest, size, type, and a hash of the path, never the path or the contents. Snapshots report an attached file as `[ATTACHED:n]` rather than its name.
 

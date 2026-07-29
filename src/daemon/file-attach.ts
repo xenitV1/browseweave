@@ -4,9 +4,9 @@
  *
  * This is the only place in BrowseWeave that reads a file the user did not
  * hand to it directly, so it is the primary defence for the whole feature.
- * Because attachment is session-approvable, the human confirming it may not be
- * at the browser, and this policy — not an approval screen — is what stands
- * between an injected instruction and an arbitrary local file.
+ * Attachment always requires the extension-owned approval UI in addition to
+ * this policy. The policy still fails closed so an injected instruction cannot
+ * turn a generic approval request into arbitrary local-file access.
  *
  * Default deny: with no policy file, nothing is attachable.
  */
@@ -54,17 +54,25 @@ const MIME_TYPES: ReadonlyMap<string, string> = new Map(Object.entries({
  * `.ssh`, `.gnupg`, `.aws`, `.env`, and `.npmrc`; this list catches the
  * secrets that live under ordinary names.
  */
-const DENIED_NAME_PATTERN = /(?:^|[._-])(?:id_rsa|id_ecdsa|id_ed25519|authorized_keys|known_hosts|shadow|passwd|keychain|kdbx|wallet|seed|mnemonic)(?:$|[._-])/iu;
+const DENIED_NAME_PATTERN = /(?:^|[._-])(?:id_rsa|id_ecdsa|id_ed25519|authorized_keys|known_hosts|shadow|passwd|credentials?|tokens?|keychain|kdbx|wallet|seed|mnemonic)(?:$|[._-])/iu;
 const DENIED_EXTENSIONS: ReadonlySet<string> = new Set([
   "pem", "key", "pfx", "p12", "jks", "keystore", "asc", "gpg", "pgp", "kdbx", "ppk", "crt", "cer", "der"
 ]);
+// Assemble these signatures at runtime so the publish-time secret scanner can
+// keep treating any complete private-key header in the archive as a hard fail.
+const DENIED_CONTENT_MARKERS = [
+  ["-----BEGIN", "PRIVATE", "KEY-----"],
+  ["-----BEGIN", "RSA", "PRIVATE", "KEY-----"],
+  ["-----BEGIN", "EC", "PRIVATE", "KEY-----"],
+  ["-----BEGIN", "OPENSSH", "PRIVATE", "KEY-----"],
+  ["-----BEGIN", "PGP", "PRIVATE", "KEY", "BLOCK-----"]
+].map((parts) => Buffer.from(parts.join(" "), "utf8"));
 
 export interface FileAttachPolicy {
   readonly enabled: boolean;
   /** Absolute, symlink-resolved directories the owner opted in. Empty means off. */
   readonly allowedDirectories: readonly string[];
   readonly maxFileBytes: number;
-  readonly maxFilesPerCommand: number;
   /** Lowercase extensions without a dot; empty means every known type is allowed. */
   readonly allowedExtensions: ReadonlySet<string>;
 }
@@ -73,7 +81,6 @@ export const DISABLED_FILE_ATTACH_POLICY: FileAttachPolicy = {
   enabled: false,
   allowedDirectories: [],
   maxFileBytes: DEFAULT_MAX_FILE_BYTES,
-  maxFilesPerCommand: 1,
   allowedExtensions: new Set<string>()
 };
 
@@ -120,12 +127,8 @@ function parsePolicy(section: Record<string, unknown> | undefined): FileAttachPo
     throw new Error(`file_attach.max_file_bytes must be between 1 and ${MAX_ALLOWED_FILE_BYTES}.`);
   }
 
-  const maxFilesPerCommand = section.max_files_per_command ?? 1;
-  if (
-    typeof maxFilesPerCommand !== "number" || !Number.isSafeInteger(maxFilesPerCommand) ||
-    maxFilesPerCommand < 1 || maxFilesPerCommand > 5
-  ) {
-    throw new Error("file_attach.max_files_per_command must be between 1 and 5.");
+  if (section.max_files_per_command !== undefined && section.max_files_per_command !== 1) {
+    throw new Error("file_attach.max_files_per_command must be exactly 1; each command attaches one file.");
   }
 
   const rawExtensions = section.allowed_extensions;
@@ -148,7 +151,6 @@ function parsePolicy(section: Record<string, unknown> | undefined): FileAttachPo
     enabled: true,
     allowedDirectories,
     maxFileBytes,
-    maxFilesPerCommand,
     allowedExtensions
   };
 }
@@ -250,6 +252,12 @@ export async function readAttachableFile(
   if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
     throw new FileAttachError("file_attach_denied", "Only files owned by the current user can be attached.");
   }
+  if (info.nlink !== 1) {
+    throw new FileAttachError(
+      "file_attach_denied",
+      "Files with multiple filesystem names (hardlinks) are never attachable."
+    );
+  }
   if (info.size > policy.maxFileBytes) {
     throw new FileAttachError(
       "file_attach_too_large",
@@ -261,7 +269,7 @@ export async function readAttachableFile(
   let bytes: Buffer;
   try {
     const opened = await handle.stat();
-    if (!opened.isFile() || opened.ino !== info.ino || opened.dev !== info.dev) {
+    if (!opened.isFile() || opened.ino !== info.ino || opened.dev !== info.dev || opened.nlink !== 1) {
       throw new FileAttachError("file_attach_changed", "The file changed while BrowseWeave was reading it.");
     }
     bytes = await handle.readFile();
@@ -270,6 +278,9 @@ export async function readAttachableFile(
   }
   if (bytes.byteLength > policy.maxFileBytes) {
     throw new FileAttachError("file_attach_too_large", "The file grew past the allowed size while it was read.");
+  }
+  if (DENIED_CONTENT_MARKERS.some((marker) => bytes.includes(marker))) {
+    throw new FileAttachError("file_attach_denied", "That file contains recognizable private-key material and is never attachable.");
   }
 
   const name = path.basename(resolvedPath);
@@ -286,7 +297,7 @@ export async function readAttachableFile(
 
 /** Stable, non-reversible identifier for the audit log, which never records a path. */
 export function auditPathDigest(resolvedPath: string): string {
-  return createHash("sha256").update(resolvedPath, "utf8").digest("hex").slice(0, 16);
+  return createHash("sha256").update(resolvedPath, "utf8").digest("hex");
 }
 
 /**
@@ -294,13 +305,20 @@ export function auditPathDigest(resolvedPath: string): string {
  * a confirmation prompt can show which file is about to be uploaded. Returns
  * undefined for any other action.
  */
-export function attachedFileFacts(params: unknown): { file: { name: string; sha256: string; size: number } } | undefined {
+export function attachedFileFacts(
+  params: unknown
+): { file: { name: string; mime_type: string; sha256: string; size: number } } | undefined {
   if (!params || typeof params !== "object" || Array.isArray(params)) return undefined;
   const file = (params as Record<string, unknown>).file;
   if (!file || typeof file !== "object" || Array.isArray(file)) return undefined;
   const record = file as Record<string, unknown>;
-  if (typeof record.name !== "string" || typeof record.sha256 !== "string" || typeof record.size !== "number") {
+  if (
+    typeof record.name !== "string" || typeof record.mime_type !== "string" ||
+    typeof record.sha256 !== "string" || typeof record.size !== "number"
+  ) {
     return undefined;
   }
-  return { file: { name: record.name, sha256: record.sha256, size: record.size } };
+  return {
+    file: { name: record.name, mime_type: record.mime_type, sha256: record.sha256, size: record.size }
+  };
 }

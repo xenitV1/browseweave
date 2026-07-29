@@ -1,8 +1,9 @@
 # Proposal: session approval, file attachment, and interaction fidelity
 
-Status: **draft for review**. Nothing in this document is implemented. It records
-the design, the threat analysis, and the verification gates for three related
-changes so that the trade-offs are written down before any code is written.
+Status: **implemented with a security amendment**. During review, file attachment
+was removed from session-confirmable authority: it now always requires the
+extension-owned signed approval UI. The remaining verification gates below still
+separate automated coverage from live browser support evidence.
 
 | Part | Change | Risk direction |
 |---|---|---|
@@ -10,9 +11,9 @@ changes so that the trade-offs are written down before any code is written.
 | 2 | Attaching local files to web forms | **Adds** a new capability class (local filesystem reach) |
 | 3 | Interaction fidelity and pacing | Neutral to positive; mostly compatibility fixes |
 
-Parts 1 and 2 interact: the decision on record is that file attachment is
-approvable through Part 1. Section 2.4 explains what that costs and what
-compensates for it.
+Parts 1 and 2 interact at the authority boundary: file attachment is deliberately
+excluded from Part 1 because an MCP client can see and echo an elicitation phrase.
+Section 2.4 records the stronger extension-owned approval contract.
 
 ---
 
@@ -179,8 +180,8 @@ daemon and extension (permitted by the boundary rules: extension may import
 
 | Tier | Risk categories | Approval |
 |---|---|---|
-| **A — never session** | `payment`, `delete`, `password`, `2fa`, `security`, `visual_click`, plus `credential_fill` | Extension-signed button only |
-| **B — session-approvable** | `form_submit`, `message`, `external_navigation`, `file_attach` | Elicitation + challenge |
+| **A — never session** | `payment`, `delete`, `password`, `2fa`, `security`, `visual_click`, `file_attach`, plus `credential_fill` | Extension-signed button only |
+| **B — session-approvable** | `form_submit`, `message`, `external_navigation` | Elicitation + challenge |
 | **Always human** | OTP, payment cards, recovery codes, CAPTCHA, WebAuthn, hardware keys | Unchanged |
 
 Default policy is empty — behaviour is identical to today until a human opts in.
@@ -219,7 +220,6 @@ browser_attach_file(ref, path)
   → extension: bytes
   → content script: File → DataTransfer → input.files = dt.files
                     → dispatch input + change
-     (dropzone mode: dragenter → dragover → drop carrying the DataTransfer)
 ```
 
 `input.files` is assignable from a `DataTransfer`; this is how drag-and-drop
@@ -245,22 +245,20 @@ BrowseWeave a **local-file exfiltration primitive**:
 This is heavier than anything currently in the threat model and the controls
 below are not optional garnish — they are the feature.
 
-### 2.4 Because file attachment is Tier B, the path policy is the primary defence
+### 2.4 File attachment requires both path policy and trusted extension approval
 
-The decision on record is that file attachment may be approved through §1. That
-removes the human-at-the-browser checkpoint, so the compensation must be
-mechanical:
+File attachment cannot be approved through §1. The mechanical path controls and
+the extension-owned signed decision are independent, mandatory gates:
 
 | Control | Requirement |
 |---|---|
 | **Allowlist** | Default **empty**; the feature is inert until a human writes it. Absolute paths only. Not writable by any MCP tool. |
-| **Denylist (always wins)** | `.ssh`, `.gnupg`, `.aws`, `.npmrc`, `.env`, `*.pem`, `*.key`, browser profiles, and BrowseWeave's own `configDir`/`stateDir`/`runtimeDir` — even if nested inside an allowed directory |
-| **Resolution order** | `O_NOFOLLOW` open, `lstat` owner + mode check, resolve, then **re-check the resolved path against both lists** |
-| **Caps** | max bytes, max files per command, extension/MIME allowlist, rate limit per hour |
-| **Approval** | Unconditional. Not a heuristic category — always requires approval, like `visual_click` |
-| **Double confirmation** | The elicitation requires **two** matching fields: the challenge phrase *and* the first 8 hex characters of the file's SHA-256, displayed in the message. Typing the digest prefix means the human saw the exact file identity, not just "a file" |
-| **Fingerprint binding** | Path, size, SHA-256, MIME, and destination origin are bound into the approval fingerprint; any change invalidates it |
-| **Audit** | SHA-256, size, MIME, destination origin, and a **hash of the path** — never the path itself |
+| **Denylist (always wins)** | Hidden paths, multiple-hardlink aliases, known credential names/key formats, recognizable private-key content, unsupported types, and BrowseWeave's own `configDir`/`stateDir`/`runtimeDir` |
+| **Resolution order** | Resolve and check both written/resolved paths, `lstat` owner/link count, `O_NOFOLLOW` open, then re-check device, inode, link count, and size through the handle |
+| **Caps** | One file per tool call, policy-bounded bytes, and extension/MIME allowlist |
+| **Approval** | Unconditional extension-signed decision. The trusted UI shows basename, size, MIME, full SHA-256, and browser-verified site |
+| **Fingerprint binding** | Name, size, SHA-256, MIME, bytes, live target, and destination context are bound into the signed approval path; any change invalidates it |
+| **Audit** | SHA-256, size, MIME, and a full SHA-256 hash of the path — never the path itself or file contents |
 
 Optional and worth considering: a destination-origin allowlist, so attachment is
 possible only to origins the human pre-authorised.
@@ -270,17 +268,18 @@ possible only to origins the human pre-authorised.
 `MAX_COMMAND_PAYLOAD_BYTES` is 512 KB (`src/core/config.ts:23`), which base64
 reduces to roughly a 380 KB file. The WebSocket frame limit is 16 MB (`:24`).
 
-v1: raise the per-command cap **for `attach_file` only** to ~8 MB (≈6 MB of file),
-checked in `#routeCommand`. Chunked transfer (`attach_file_chunk` +
+v1: keep the file itself policy-bounded to 8 MiB and raise the serialized
+`attach_file` command ceiling to 12 MiB, matching the extension receiver after
+base64 expansion. Chunked transfer (`attach_file_chunk` +
 `attach_file_commit`, with buffer lifecycle and cleanup) is deferred; it is the
 right answer for large files but not worth the state machine in v1. The limit is
 documented rather than silently truncating.
 
 ### 2.6 Snapshot surface
 
-- `dom-utils.ts:357` excludes `file` from `isEditable`; that stays. But file
-  inputs must become a distinct snapshot kind so the model can find a ref, with
-  `accept` and `multiple` exposed.
+- `dom-utils.ts` excludes `file` from `isEditable`; that stays. File inputs are
+  still interactive snapshot candidates and expose `type: "file"`, so the model
+  can find a ref without treating the field as text-editable.
 - After attachment the browser reports `C:\fakepath\<basename>` in `input.value`
   by specification, so the local directory does not leak. The basename still can;
   snapshots report `[ATTACHED:n]` and a masked name.
@@ -291,11 +290,12 @@ documented rather than silently truncating.
 | File | Change |
 |---|---|
 | `src/core/protocol.ts:14-36` | `attach_file` action; tier tables; `approval_source` |
-| `src/core/config.ts` | policy file location and validation |
-| `src/mcp/server.ts` | `browser_attach_file`; elicitation handler; `browser_status` reports session-approval availability |
+| `src/daemon/file-attach.ts` | policy validation, file resolution/read/hash, and file-size cap |
+| `src/mcp/server.ts` | `browser_attach_file`; elicitation handler for the narrower non-file tier; `browser_status` reports session-approval availability |
 | `src/daemon/runtime.ts` | policy engine, file read + hash, `session_approval_*` IPC, per-action payload cap |
-| `extension/src/content/runtime.ts` | `attachFile` (input + drop modes) |
+| `extension/src/content/runtime.ts` | direct file-input attachment through `DataTransfer` |
 | `extension/src/background/runtime.ts` | session-approval toggle, `approval_source` handling, replay set, passive notification |
+| `extension/src/ui/popup.ts` | exact-file identity in the trusted approval prompt |
 | `extension/src/shared/dom-utils.ts` | file-input snapshot kind |
 | `extension/src/shared/pure.ts` | `file_attach` risk category |
 | `extension/src/ui/options.ts` | session-approval toggle UI |
@@ -406,7 +406,7 @@ No support claim may widen ahead of evidence.
    denylist nested inside allowlist, non-owner file, `0644` file.
 5. Phrase handling: constant-time compare, single attempt, absence from every
    log and result payload.
-6. Confirmation that a session-approved command is rejected when the extension
-   toggle is off, when the fingerprint moved, and when the `approval_id` was
-   already consumed.
+6. Confirmation that file attachment is never session-approved; other session
+   approvals are rejected when the extension toggle is off, the fingerprint
+   moved, or the `approval_id` was already consumed.
 7. Latency before/after for §3.4 on a page with many iframes.

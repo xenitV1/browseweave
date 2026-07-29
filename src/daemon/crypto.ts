@@ -29,7 +29,6 @@ const SETUP_AUTH_TAG_BYTES = 16;
 export function own(record: JsonObject, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
-
 export function hasExactFields(record: JsonObject, fields: ReadonlySet<string>): boolean {
   const keys = Object.keys(record);
   return keys.length === fields.size && keys.every((key) => fields.has(key));
@@ -222,4 +221,3 @@ export class ReplayNonceCache {
     }
   }
 }
-

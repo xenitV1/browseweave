@@ -39,7 +39,7 @@ const PARALLEL_PATCH_EXPECTATIONS = new Map([
   ["PRIVACY.md", { ws: 1, display: 0 }],
   ["background.js", { ws: 1, display: 1 }],
   ["manifest.json", { ws: 1, display: 0 }],
-  ["options.html", { ws: 1, display: 0 }],
+  ["options.html", { ws: 0, display: 0 }],
   ["popup.html", { ws: 0, display: 1 }]
 ]);
 
@@ -269,7 +269,7 @@ async function validateDefaultPortPatchSurface(directory) {
   for (const expectedPath of PARALLEL_PATCH_EXPECTATIONS.keys()) {
     if (!found.has(expectedPath)) fail(`Refusing to patch an incomplete extension build; missing ${expectedPath}.`);
   }
-  if (totalWs !== 4 || totalDisplay !== 2) {
+  if (totalWs !== 3 || totalDisplay !== 2) {
     fail(`Refusing to patch an unexpected extension surface (${totalWs} WebSocket, ${totalDisplay} display literals).`);
   }
 }

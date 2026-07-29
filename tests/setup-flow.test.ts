@@ -8,7 +8,9 @@ import {
   SETUP_SECRET_PATTERN,
   createSetupTicket,
   prepareManagedExtension,
+  prepareSetupBeforeBrowserConsent,
   removeManagedExtensionCopy,
+  shouldReuseConnectedBrowser,
   setupPageHtml,
   startSetupPageServer
 } from "../src/setup/flow.js";
@@ -30,6 +32,20 @@ function get(url: string): Promise<{ status: number; headers: Record<string, str
 }
 
 describe("one-click local setup page", () => {
+  it("never reuses a live connection after its legacy extension copy was removed", () => {
+    expect(shouldReuseConnectedBrowser({ newProfile: false, legacyCopyRemoved: false })).toBe(true);
+    expect(shouldReuseConnectedBrowser({ newProfile: true, legacyCopyRemoved: false })).toBe(false);
+    expect(shouldReuseConnectedBrowser({ newProfile: false, legacyCopyRemoved: true })).toBe(false);
+  });
+
+  it("configures MCP clients before installing the service or asking for browser consent", async () => {
+    const phases: string[] = [];
+    await prepareSetupBeforeBrowserConsent({
+      configureClients: async () => { phases.push("mcp"); },
+      installService: async () => { phases.push("service"); }
+    });
+    expect(phases).toEqual(["mcp", "service"]);
+  });
   it("keeps the short-lived secret out of the URL and serves only the exact loopback path", async () => {
     const setup = await startSetupPageServer({ browser: "chrome", extensionPath: "/tmp/BrowseWeave extension" });
     try {

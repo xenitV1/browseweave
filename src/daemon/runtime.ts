@@ -2091,7 +2091,8 @@ export class BrowseWeaveDaemon {
       description: approval.description,
       params_sha256: approval.paramsSha256,
       approval_fingerprint: approval.approvalFingerprint,
-      expires_at: approval.expiresAtIso
+      expires_at: approval.expiresAtIso,
+      ...(attachedFileFacts(approval.params) ?? {})
     };
     try {
       session.socket.send(JSON.stringify(request));
@@ -2162,7 +2163,10 @@ export class BrowseWeaveDaemon {
       event: "command",
       action: "attach_file",
       outcome: "file_accepted",
-      code: `sha256:${file.sha256.slice(0, 16)}:path:${auditPathDigest(file.resolvedPath)}`
+      file_sha256: file.sha256,
+      file_size: file.size,
+      file_mime_type: file.mimeType,
+      file_path_sha256: auditPathDigest(file.resolvedPath)
     });
 
     const actionParams: JsonObject = {

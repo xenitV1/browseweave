@@ -823,7 +823,6 @@ export function keystrokeIntervalMs(
 }
 
 export const SCROLL_MAX_STEP_PX = 360;
-export const SCROLL_MAX_STEPS = 8;
 
 /**
  * A single jump skips every intermediate offset, so `IntersectionObserver`
@@ -833,16 +832,16 @@ export const SCROLL_MAX_STEPS = 8;
  */
 export function scrollStepDeltas(
   delta: number,
-  maxStepPx = SCROLL_MAX_STEP_PX,
-  maxSteps = SCROLL_MAX_STEPS
+  maxStepPx = SCROLL_MAX_STEP_PX
 ): number[] {
   if (!Number.isFinite(delta) || delta === 0) return [];
   const limit = Math.max(1, Math.trunc(maxStepPx));
-  const cap = Math.max(1, Math.trunc(maxSteps));
-  const steps = Math.min(cap, Math.max(1, Math.ceil(Math.abs(delta) / limit)));
+  const steps = Math.max(1, Math.ceil(Math.abs(delta) / limit));
   const base = Math.trunc(delta / steps);
   const deltas = new Array<number>(steps).fill(base);
-  deltas[steps - 1] = base + (delta - base * steps);
+  const remainder = delta - base * steps;
+  const direction = Math.sign(remainder);
+  for (let index = 0; index < Math.abs(remainder); index += 1) deltas[index]! += direction;
   return deltas;
 }
 
@@ -879,11 +878,26 @@ export function pointerApproachPoints(
 export const MUTATION_INTERVAL_CONTINUING_MS = 120;
 export const MUTATION_INTERVAL_COMMITTING_MS = 750;
 export const MUTATION_INTERVAL_STRESSED_MS = 2_500;
+export const FILL_BATCH_TYPING_BUDGET_MS = 10_000;
+
+/** One interval shared by every paced text field, keeping the whole batch bounded. */
+export function fillBatchKeystrokeIntervalMs(
+  textLengths: readonly number[],
+  budgetMs = FILL_BATCH_TYPING_BUDGET_MS
+): number {
+  const pacedTransitions = textLengths.reduce((total, rawLength) => {
+    if (!Number.isFinite(rawLength)) return total;
+    const length = Math.trunc(rawLength);
+    return length > 1 && length <= TYPING_MAX_PACED_CHARS ? total + length - 1 : total;
+  }, 0);
+  if (pacedTransitions === 0) return 0;
+  return Math.max(0, Math.min(TYPING_MAX_INTERVAL_MS, Math.floor(Math.max(0, budgetMs) / pacedTransitions)));
+}
 
 /** Actions that continue an interaction the caller already began on this tab. */
 const CONTINUING_INTERACTION_ACTIONS = new Set<string>(["type", "fill_form", "hover", "scroll", "press"]);
 /** Keys that commit the surrounding form rather than continue editing it. */
-const COMMITTING_KEYS = new Set<string>(["Enter", "NumpadEnter"]);
+const COMMITTING_KEYS = new Set<string>(["Enter", "NumpadEnter", " ", "Space", "Spacebar"]);
 
 /**
  * A uniform floor is simultaneously slower than necessary inside one

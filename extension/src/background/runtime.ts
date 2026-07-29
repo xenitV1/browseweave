@@ -24,6 +24,7 @@ import {
 import {
   BASE64URL_PATTERN,
   BROWSER_ACTIONS,
+  MAX_EXTENSION_INCOMING_MESSAGE_BYTES,
   PROTOCOL_VERSION,
   SHA256_PATTERN,
   approvalDecisionSigningPayload,
@@ -31,6 +32,7 @@ import {
   isBrowserAction,
   isJsonObject,
   isJsonValue,
+  type ApprovalFileIdentity,
   type ApprovalDecision,
   type ApprovalSource,
   type BrowserAction,
@@ -138,6 +140,7 @@ interface PublicApproval {
   target_site: string;
   target_title: string;
   destination_origin: string;
+  file?: ApprovalFileIdentity;
 }
 
 interface TrustedApprovalTarget {
@@ -157,6 +160,7 @@ interface LocalApprovalContext {
   destination_origin: string;
   source_binding_fingerprint: string;
   expires_at: number;
+  file?: ApprovalFileIdentity;
 }
 
 interface PendingApproval extends ExtensionApprovalRequest {
@@ -208,7 +212,6 @@ const COMMAND_ACTIONS = new Set([
 ]);
 
 const CONTENT_ACTIONS = new Set(["snapshot", "click", "click_at", "type", "fill_form", "hover", "press", "scroll", "wait", "attach_file"]);
-const MAX_INCOMING_MESSAGE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_SNAPSHOT_CHARS = 12_000;
 const MAX_SNAPSHOT_CACHE_ENTRIES = 6;
 const SNAPSHOT_FRAME_CONCURRENCY = 6;
@@ -245,6 +248,7 @@ interface ScreenshotCacheEntry {
 const screenshotCache = new Map<string, ScreenshotCacheEntry>();
 const pendingApprovals = new Map<string, PendingApproval>();
 const localApprovalContexts = new Map<string, LocalApprovalContext>();
+const contentInjectionFlights = new Map<number, Promise<void>>();
 const humanInterventions = new Map<number, HumanInterventionState>();
 const pausedOrigins = new Map<string, HumanInterventionState["kind"]>();
 const mutationQueues = new Map<number, Promise<void>>();
@@ -1195,7 +1199,8 @@ function publicApproval(approval: PendingApproval): PublicApproval {
     target_origin: approval.trusted_target.origin,
     target_site: approval.trusted_target.site,
     target_title: approval.trusted_target.title,
-    destination_origin: approval.trusted_target.destination_origin
+    destination_origin: approval.trusted_target.destination_origin,
+    ...(approval.file ? { file: { ...approval.file } } : {})
   };
 }
 
@@ -1229,6 +1234,28 @@ async function invalidateApprovalTarget(tabIdValue: number, frameIdValue?: numbe
 
 type ParsedApprovalRequest = Omit<PendingApproval, "trusted_target">;
 
+function approvalFileIdentity(value: unknown): ApprovalFileIdentity | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const file = value as Record<string, unknown>;
+  if (
+    typeof file.name !== "string" || file.name.length < 1 || file.name.length > 255 ||
+      /[\\/\0\r\n]/u.test(file.name) ||
+    typeof file.mime_type !== "string" || file.mime_type.length > 192 ||
+      !/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/iu.test(file.mime_type) ||
+    typeof file.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(file.sha256) ||
+    typeof file.size !== "number" || !Number.isSafeInteger(file.size) || file.size < 0 ||
+      file.size > 8 * 1024 * 1024
+  ) return undefined;
+  return { name: file.name, mime_type: file.mime_type, sha256: file.sha256, size: file.size };
+}
+
+function sameApprovalFile(left: ApprovalFileIdentity | undefined, right: ApprovalFileIdentity | undefined): boolean {
+  return left === undefined
+    ? right === undefined
+    : right !== undefined && left.name === right.name && left.mime_type === right.mime_type &&
+      left.sha256 === right.sha256 && left.size === right.size;
+}
+
 function parseApprovalRequest(record: Record<string, unknown>): ParsedApprovalRequest | null {
   if (
     record.type !== "approval_request" ||
@@ -1245,6 +1272,10 @@ function parseApprovalRequest(record: Record<string, unknown>): ParsedApprovalRe
     !isApprovalFingerprint(record.approval_fingerprint) ||
     typeof record.expires_at !== "string"
   ) return null;
+  const file = approvalFileIdentity(record.file);
+  if ((record.action === "attach_file") !== (file !== undefined) || (record.file !== undefined && file === undefined)) {
+    return null;
+  }
   const expiresAt = Date.parse(record.expires_at);
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + 30 * 60_000) return null;
   const safeDescription = maskUntrustedApprovalDescription(record.description);
@@ -1263,7 +1294,8 @@ function parseApprovalRequest(record: Record<string, unknown>): ParsedApprovalRe
     expires_at: record.expires_at,
     daemon_instance_id: daemonInstanceId,
     received_at: new Date().toISOString(),
-    safe_description: safeDescription
+    safe_description: safeDescription,
+    ...(file ? { file } : {})
   };
 }
 
@@ -1341,6 +1373,10 @@ async function receiveApprovalRequest(record: Record<string, unknown>, currentSo
   ) {
     if (!trustedTarget.destination_origin) trustedTarget.destination_origin = localContext.destination_origin;
   }
+  if (approval.action === "attach_file" && !sameApprovalFile(approval.file, localContext?.file)) {
+    currentSocket.close(1008, "mismatched approval file identity");
+    return;
+  }
   if (approval.risk === "external_navigation" && !trustedTarget.destination_origin) {
     currentSocket.close(1008, "missing trusted approval destination");
     return;
@@ -1372,7 +1408,7 @@ async function handleSocketMessage(
   pairingSecret: string,
   handshake: ExtensionHandshake
 ): Promise<void> {
-  if (typeof rawData !== "string" || rawData.length > MAX_INCOMING_MESSAGE_BYTES) {
+  if (typeof rawData !== "string" || rawData.length > MAX_EXTENSION_INCOMING_MESSAGE_BYTES) {
     currentSocket.close(1009, "invalid message");
     return;
   }
@@ -1558,7 +1594,7 @@ function exactWebOrigin(value: unknown): string {
   }
 }
 
-function rememberLocalApprovalContext(action: BrowserAction, error: unknown): void {
+function rememberLocalApprovalContext(action: BrowserAction, error: unknown, payload: Record<string, unknown>): void {
   if (
     !(error instanceof BridgeError) || error.code !== "approval_required" ||
     !error.approvalFingerprint || error.targetTabId === undefined || error.targetFrameId === undefined
@@ -1567,13 +1603,15 @@ function rememberLocalApprovalContext(action: BrowserAction, error: unknown): vo
   for (const [fingerprint, context] of localApprovalContexts) {
     if (context.expires_at <= now) localApprovalContexts.delete(fingerprint);
   }
+  const file = action === "attach_file" ? approvalFileIdentity(payload.file) : undefined;
   localApprovalContexts.set(error.approvalFingerprint, {
     action,
     target_tab_id: error.targetTabId,
     target_frame_id: error.targetFrameId,
     destination_origin: exactWebOrigin(error.details?.destination_origin),
     source_binding_fingerprint: isApprovalFingerprint(error.localTargetBinding) ? error.localTargetBinding : "",
-    expires_at: now + 30 * 60_000
+    expires_at: now + 30 * 60_000,
+    ...(file ? { file } : {})
   });
 }
 
@@ -1643,7 +1681,7 @@ async function handleCommand(command: CommandMessage, currentSocket: WebSocket, 
     );
     response = { type: "result", id: command.id, ok: true, result: result ?? null };
   } catch (error) {
-    if (isBrowserAction(command.action)) rememberLocalApprovalContext(command.action, error);
+    if (isBrowserAction(command.action)) rememberLocalApprovalContext(command.action, error, command.payload);
     response = { type: "result", id: command.id, ok: false, error: serializeError(error) };
   }
   if (command.action === "credential_fill") scrubCredentialValues(command.payload);
@@ -1653,27 +1691,38 @@ async function handleCommand(command: CommandMessage, currentSocket: WebSocket, 
 }
 
 async function injectContentScript(tab: browser.tabs.Tab): Promise<void> {
-  try {
-    if (extensionBrowser.runtime.getManifest().manifest_version === 3 && extensionBrowser.scripting?.executeScript) {
-      await extensionBrowser.scripting.executeScript({
-        target: { tabId: tabId(tab), allFrames: true },
-        files: ["content.js"]
-      });
-    } else {
-      await extensionBrowser.tabs.executeScript(tabId(tab), {
-        file: "content.js",
-        allFrames: true,
-        matchAboutBlank: true,
-        runAt: "document_idle"
-      });
+  const id = tabId(tab);
+  const existing = contentInjectionFlights.get(id);
+  if (existing) return existing;
+  const flight = (async (): Promise<void> => {
+    try {
+      if (extensionBrowser.runtime.getManifest().manifest_version === 3 && extensionBrowser.scripting?.executeScript) {
+        await extensionBrowser.scripting.executeScript({
+          target: { tabId: id, allFrames: true },
+          files: ["content.js"]
+        });
+      } else {
+        await extensionBrowser.tabs.executeScript(id, {
+          file: "content.js",
+          allFrames: true,
+          matchAboutBlank: true,
+          runAt: "document_idle"
+        });
+      }
+    } catch (error) {
+      throw new BridgeError(
+        "page_not_controllable",
+        "This page cannot be controlled by a browser extension. Open or reload a normal HTTP or HTTPS page.",
+        undefined,
+        { cause: error instanceof Error ? error.message : String(error) }
+      );
     }
-  } catch (error) {
-    throw new BridgeError(
-      "page_not_controllable",
-      "This page cannot be controlled by a browser extension. Open or reload a normal HTTP or HTTPS page.",
-      undefined,
-      { cause: error instanceof Error ? error.message : String(error) }
-    );
+  })();
+  contentInjectionFlights.set(id, flight);
+  try {
+    await flight;
+  } finally {
+    if (contentInjectionFlights.get(id) === flight) contentInjectionFlights.delete(id);
   }
 }
 

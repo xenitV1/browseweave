@@ -11,6 +11,8 @@ const DEFAULT_MAX_AUDIT_QUEUE_ENTRIES = 512;
 const DEFAULT_MAX_AUDIT_FILE_BYTES = 5 * 1024 * 1024;
 const MIN_AUDIT_FILE_BYTES = 512;
 const AUDIT_LABEL_PATTERN = /^[a-z][a-z0-9_]{0,119}$/u;
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
+const MIME_TYPE_PATTERN = /^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/iu;
 const UNAUTHENTICATED_AUDIT_WINDOW_MS = 1_000;
 const UNAUTHENTICATED_AUDIT_BURST_PER_OUTCOME = 2;
 const MAX_UNAUTHENTICATED_AUDIT_OUTCOMES = 16;
@@ -23,6 +25,11 @@ export interface SafeAuditEvent {
   code?: string;
   duration_ms?: number;
   count?: number;
+  /** Structured attachment metadata; raw paths and file contents are forbidden. */
+  file_sha256?: string;
+  file_size?: number;
+  file_mime_type?: string;
+  file_path_sha256?: string;
 }
 
 
@@ -48,6 +55,20 @@ function safeAuditLine(event: SafeAuditEvent): string {
   }
   if (event.count !== undefined && Number.isSafeInteger(event.count) && event.count > 0) {
     safeRecord.count = event.count;
+  }
+  if (event.file_sha256 !== undefined && SHA256_HEX_PATTERN.test(event.file_sha256)) {
+    safeRecord.file_sha256 = event.file_sha256;
+  }
+  if (
+    event.file_size !== undefined && Number.isSafeInteger(event.file_size) &&
+    event.file_size >= 0 && event.file_size <= 8 * 1024 * 1024
+  ) safeRecord.file_size = event.file_size;
+  if (
+    event.file_mime_type !== undefined && event.file_mime_type.length <= 192 &&
+    MIME_TYPE_PATTERN.test(event.file_mime_type)
+  ) safeRecord.file_mime_type = event.file_mime_type.toLowerCase();
+  if (event.file_path_sha256 !== undefined && SHA256_HEX_PATTERN.test(event.file_path_sha256)) {
+    safeRecord.file_path_sha256 = event.file_path_sha256;
   }
   return `${JSON.stringify(safeRecord)}\n`;
 }

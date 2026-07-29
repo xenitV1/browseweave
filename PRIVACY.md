@@ -28,7 +28,7 @@ Browser content returned by a tool becomes part of the MCP result. The selected 
 
 ## Local files
 
-File attachment is off by default. When the owner enables it, BrowseWeave reads only files inside the directories listed in `policy.json`, and never a hidden file or directory, key or credential material, or an unsupported file type. A file that is attached is uploaded to the website the user directed, under that site's terms; BrowseWeave does not send it anywhere else. The audit log records the file's SHA-256, size, type, and a hash of its path — never the path or the contents. The extension receives the file's basename and bytes for the single upload and does not persist them.
+File attachment is off by default. When the owner enables it, BrowseWeave reads only files inside the directories listed in `policy.json`; it refuses hidden paths, multiple-hardlink aliases, known credential filenames and key formats, recognizable private-key content, and unsupported types. These checks cannot recognize every renamed or archived secret, so every upload also requires an extension-signed approval showing the exact file identity and browser-verified site. A file that is attached is uploaded to that website under its terms; BrowseWeave does not send it anywhere else. The audit log records the file's SHA-256, size, type, and a hash of its path — never the path or contents. The extension receives the basename and bytes for the single upload and does not persist them.
 
 ## Local storage
 

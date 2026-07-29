@@ -14,6 +14,7 @@ import {
   classifyRisk,
   externalNavigationRisk,
   approvalFingerprint,
+  fillBatchKeystrokeIntervalMs,
   isStableRef,
   keystrokeIntervalMs,
   mapVisualCoordinates,
@@ -782,7 +783,8 @@ async function typeIntoElement(
   element: Element,
   text: string,
   clear: boolean,
-  safetyCheck: () => void = () => undefined
+  safetyCheck: () => void = () => undefined,
+  maximumKeystrokeIntervalMs = Number.POSITIVE_INFINITY
 ): Promise<Record<string, unknown>> {
   ensureVisible(element);
   if (!isEditable(element)) {
@@ -826,7 +828,10 @@ async function typeIntoElement(
     } else if (clear) {
       value = "";
     }
-    const keystrokeInterval = keystrokeIntervalMs(text.length);
+    const keystrokeInterval = Math.min(
+      keystrokeIntervalMs(text.length),
+      Math.max(0, Math.trunc(maximumKeystrokeIntervalMs))
+    );
     for (const character of text) {
       safetyCheck();
       emitKeyboard(element, "keydown", character);
@@ -921,10 +926,11 @@ function prepareFillTarget(element: Element, value: unknown, clear: boolean): {
 
 async function applyPreparedFill(
   field: ReturnType<typeof prepareFillTarget>,
-  safetyCheck: () => void = () => undefined
+  safetyCheck: () => void = () => undefined,
+  maximumKeystrokeIntervalMs = Number.POSITIVE_INFINITY
 ): Promise<Record<string, unknown>> {
   if (field.value.kind === "text") {
-    return typeIntoElement(field.element, field.value.text, field.clear, safetyCheck);
+    return typeIntoElement(field.element, field.value.text, field.clear, safetyCheck, maximumKeystrokeIntervalMs);
   }
   const input = field.element as HTMLInputElement;
   const desired = field.value.kind === "checkbox" ? field.value.checked : true;
@@ -1699,6 +1705,18 @@ async function execute(request: ContentRequest): Promise<unknown> {
       const fields = validateFillBatchFields(payload.fields);
       const initialPrepared = prepareFillBatch(fields);
       const expectedBatchMaterial = stableSafetyMaterial(fillBatchMaterial(fields, initialPrepared));
+      const maximumKeystrokeInterval = fillBatchKeystrokeIntervalMs(initialPrepared.map((field) => (
+        field.value.kind === "text" ? field.value.text.length : 0
+      )));
+      const fillDeadline = performance.now() + 20_000;
+      const assertFillDeadline = (): void => {
+        if (performance.now() > fillDeadline) {
+          throw new ContentError(
+            "fill_form_time_budget_exceeded",
+            "The form batch stopped before the bridge timeout. Retry only the fields reported as unfinished."
+          );
+        }
+      };
       await guardRisks(initialPrepared.map((field) => ({ action: "fill_form", element: field.element })), request);
       const results: Record<string, unknown>[] = [];
       const completedRefs: string[] = [];
@@ -1708,6 +1726,7 @@ async function execute(request: ContentRequest): Promise<unknown> {
           // reclassify a later target. Re-resolve and re-check the entire batch
           // immediately before every individual write.
           const currentPrepared = prepareFillBatch(fields);
+          assertFillDeadline();
           const currentBatchMaterial = stableSafetyMaterial(fillBatchMaterial(fields, currentPrepared));
           if (currentBatchMaterial !== expectedBatchMaterial) {
             throw new ContentError(
@@ -1721,12 +1740,13 @@ async function execute(request: ContentRequest): Promise<unknown> {
           const current = currentPrepared[index];
           if (!current) throw new ContentError("fill_form_context_changed", "The next form target is no longer available.");
           results.push(await applyPreparedFill(current, () => {
+            assertFillDeadline();
             const latestPrepared = prepareFillBatch(fields);
             if (stableSafetyMaterial(fillBatchMaterial(fields, latestPrepared)) !== expectedBatchMaterial) {
               throw new ContentError("fill_form_context_changed", "The form targets changed during the batch.");
             }
             assertRiskTargetsUnchanged(targets, guard);
-          }));
+          }, maximumKeystrokeInterval));
           completedRefs.push(fields[index]!.ref);
         } catch (error) {
           throw partialFillFailure(error, completedRefs);

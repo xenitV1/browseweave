@@ -1889,7 +1889,7 @@ describe("BrowseWeave daemon integration", () => {
     await writeFile(
       path.join(root, "config", "policy.json"),
       JSON.stringify({
-        session_approval: { enabled: true, risks: ["file_attach"] },
+        session_approval: { enabled: true, risks: ["form_submit"] },
         file_attach: { enabled: true, allowed_directories: [documents] }
       }),
       { mode: 0o600 }
@@ -1915,26 +1915,25 @@ describe("BrowseWeave daemon integration", () => {
 
     extension.socket.send(commandFailure(command, FINGERPRINT_A, UNTRUSTED_LABEL, "file_attach"));
     const approvalRequest = await extension.next("approval_request");
+    expect(approvalRequest.file).toMatchObject({ name: "report.txt", size: 17 });
+    expect(String((approvalRequest.file as Record<string, unknown>).sha256)).toMatch(/^[a-f0-9]{64}$/u);
     expect(await call).toMatchObject({
       ok: true,
-      result: { approval_required: true, session_approval_available: true }
+      result: { approval_required: true, session_approval_available: false }
     });
 
     const begin = await ipcCall(harness, "session_approval_begin", {
       approval_id: approvalRequest.approval_id as string
     });
-    const beginResult = isJsonObjectForTest(begin.result) ? begin.result : {};
-    const beginFile = isJsonObjectForTest(beginResult.file) ? beginResult.file : {};
-    expect(beginFile).toMatchObject({ name: "report.txt", size: 17 });
-    expect(String(beginFile.sha256)).toMatch(/^[a-f0-9]{64}$/u);
-    // The confirmation facts identify the file without carrying its contents.
-    expect(JSON.stringify(beginResult)).not.toContain(String(file.base64));
+    expect(begin).toMatchObject({ ok: false });
 
-    await ipcCall(harness, "session_approval_submit", {
-      approval_id: approvalRequest.approval_id as string,
+    extension.socket.send(JSON.stringify({
+      type: "approval_decision",
+      approval_id: approvalRequest.approval_id,
       decision: "approve",
-      confirmation_phrase: String(beginResult.confirmation_phrase)
-    });
+      signature: signDecision(extension, approvalRequest, "approve")
+    }));
+    expect(await extension.next("approval_resolved")).toMatchObject({ outcome: "approved" });
 
     // Changing the file must not be able to ride the approval given for the
     // bytes the human actually confirmed.
@@ -1952,7 +1951,7 @@ describe("BrowseWeave daemon integration", () => {
     expect(liveCheck).toMatchObject({ approved: false, revalidate_only: true });
     extension.socket.send(commandFailure(liveCheck, FINGERPRINT_A, UNTRUSTED_LABEL, "file_attach"));
     const approved = await extension.next("command");
-    expect(approved).toMatchObject({ approved: true, approval_source: "session" });
+    expect(approved).toMatchObject({ approved: true, approval_source: "extension_signed" });
     extension.socket.send(JSON.stringify({
       type: "result",
       id: approved.id,
@@ -1965,6 +1964,15 @@ describe("BrowseWeave daemon integration", () => {
     const audit = await readFile(harness.config.auditLogPath, "utf8");
     expect(audit).not.toContain(documents);
     expect(audit).not.toContain("report.txt");
+    const attachmentAudit = audit.trim().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((record) => record.action === "attach_file" && record.outcome === "file_accepted");
+    expect(attachmentAudit).toMatchObject({
+      file_sha256: file.sha256,
+      file_size: 17,
+      file_mime_type: "text/plain"
+    });
+    expect(String(attachmentAudit?.file_path_sha256)).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("refuses to read a file the owner policy does not allow", async () => {
