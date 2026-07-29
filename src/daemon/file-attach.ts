@@ -162,28 +162,18 @@ function withinDirectory(candidate: string, directory: string): boolean {
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
-/**
- * Checks the resolved path against both lists. Called after symlink resolution
- * so a link inside an allowed directory cannot reach outside it, and a link
- * pointing at a denied name cannot hide behind an innocent one.
- */
-function assertPathAllowed(resolvedPath: string, policy: FileAttachPolicy, reservedDirectories: readonly string[]): void {
-  const segments = resolvedPath.split(path.sep).filter(Boolean);
+function assertPathContentsAllowed(candidatePath: string, policy: FileAttachPolicy): void {
+  const segments = candidatePath.split(path.sep).filter(Boolean);
   if (segments.some((segment) => segment.startsWith("."))) {
     throw new FileAttachError(
       "file_attach_denied",
       "Hidden files and directories are never attachable. This covers credential stores such as .ssh, .gnupg, .aws, .env, and .npmrc."
     );
   }
-  const name = path.basename(resolvedPath);
+  const name = path.basename(candidatePath);
   const extension = path.extname(name).replace(/^\./u, "").toLowerCase();
   if (DENIED_EXTENSIONS.has(extension) || DENIED_NAME_PATTERN.test(name)) {
     throw new FileAttachError("file_attach_denied", "That file looks like key or credential material and is never attachable.");
-  }
-  for (const reserved of reservedDirectories) {
-    if (withinDirectory(resolvedPath, reserved) || resolvedPath === reserved) {
-      throw new FileAttachError("file_attach_denied", "BrowseWeave's own configuration and state are never attachable.");
-    }
   }
   if (!MIME_TYPES.has(extension)) {
     throw new FileAttachError("file_attach_unsupported_type", `Files of type ".${extension || "(none)"}" cannot be attached.`);
@@ -191,12 +181,28 @@ function assertPathAllowed(resolvedPath: string, policy: FileAttachPolicy, reser
   if (policy.allowedExtensions.size > 0 && !policy.allowedExtensions.has(extension)) {
     throw new FileAttachError("file_attach_unsupported_type", `Your policy does not allow attaching ".${extension}" files.`);
   }
-  if (!policy.allowedDirectories.some((directory) => withinDirectory(resolvedPath, directory))) {
+}
+
+function assertResolvedLocationAllowed(
+  resolvedPath: string,
+  allowedDirectories: readonly string[],
+  reservedDirectories: readonly string[]
+): void {
+  for (const reserved of reservedDirectories) {
+    if (withinDirectory(resolvedPath, reserved) || resolvedPath === reserved) {
+      throw new FileAttachError("file_attach_denied", "BrowseWeave's own configuration and state are never attachable.");
+    }
+  }
+  if (!allowedDirectories.some((directory) => withinDirectory(resolvedPath, directory))) {
     throw new FileAttachError(
       "file_attach_outside_allowlist",
       "That path is outside every directory your BrowseWeave policy allows attaching from."
     );
   }
+}
+
+async function canonicalDirectory(directory: string): Promise<string> {
+  return await realpath(directory).catch(() => path.resolve(directory));
 }
 
 /**
@@ -225,10 +231,17 @@ export async function readAttachableFile(
   } catch {
     throw new FileAttachError("file_attach_not_found", "That file does not exist or is not readable.");
   }
-  // Both the path as written and the path after resolution must pass, so a
-  // symlink cannot be used to smuggle a denied name past the first check.
-  assertPathAllowed(path.resolve(requestedPath), policy, reservedDirectories);
-  assertPathAllowed(resolvedPath, policy, reservedDirectories);
+  // Both the path as written and the path after resolution must pass the name
+  // and type rules, so a symlink cannot hide denied material. Location checks
+  // use canonical paths on both sides: macOS exposes /var through /private/var,
+  // and Windows realpath may canonicalise casing or short path segments.
+  assertPathContentsAllowed(path.resolve(requestedPath), policy);
+  assertPathContentsAllowed(resolvedPath, policy);
+  const [allowedDirectories, canonicalReservedDirectories] = await Promise.all([
+    Promise.all(policy.allowedDirectories.map(canonicalDirectory)),
+    Promise.all(reservedDirectories.map(canonicalDirectory))
+  ]);
+  assertResolvedLocationAllowed(resolvedPath, allowedDirectories, canonicalReservedDirectories);
 
   const info = await lstat(resolvedPath);
   if (!info.isFile() || info.isSymbolicLink()) {

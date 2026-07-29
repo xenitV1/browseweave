@@ -177,6 +177,17 @@ describe("attachable file reading", () => {
       .rejects.toThrow(/outside every directory/);
   });
 
+  it.runIf(process.platform !== "win32")("canonicalises an allowed directory before comparing a resolved file", async () => {
+    const actual = await makeRoot();
+    const aliasParent = await makeRoot();
+    const alias = path.join(aliasParent, "documents");
+    await symlink(actual, alias);
+    await writeFile(path.join(actual, "report.txt"), "allowed through the directory alias");
+
+    const attachable = await readAttachableFile(path.join(alias, "report.txt"), policyFor(alias));
+    expect(attachable.name).toBe("report.txt");
+  });
+
   it.runIf(process.platform !== "win32")("refuses a link whose target is denied, even from an allowed name", async () => {
     const allowed = await makeRoot();
     const key = path.join(allowed, "server.pem");
