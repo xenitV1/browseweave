@@ -8,6 +8,9 @@ import {
   SETUP_SECRET_PATTERN,
   createSetupTicket,
   prepareManagedExtension,
+  prepareSetupBeforeBrowserConsent,
+  removeManagedExtensionCopy,
+  shouldReuseConnectedBrowser,
   setupPageHtml,
   startSetupPageServer
 } from "../src/setup/flow.js";
@@ -29,6 +32,20 @@ function get(url: string): Promise<{ status: number; headers: Record<string, str
 }
 
 describe("one-click local setup page", () => {
+  it("never reuses a live connection after its legacy extension copy was removed", () => {
+    expect(shouldReuseConnectedBrowser({ newProfile: false, legacyCopyRemoved: false })).toBe(true);
+    expect(shouldReuseConnectedBrowser({ newProfile: true, legacyCopyRemoved: false })).toBe(false);
+    expect(shouldReuseConnectedBrowser({ newProfile: false, legacyCopyRemoved: true })).toBe(false);
+  });
+
+  it("configures MCP clients before installing the service or asking for browser consent", async () => {
+    const phases: string[] = [];
+    await prepareSetupBeforeBrowserConsent({
+      configureClients: async () => { phases.push("mcp"); },
+      installService: async () => { phases.push("service"); }
+    });
+    expect(phases).toEqual(["mcp", "service"]);
+  });
   it("keeps the short-lived secret out of the URL and serves only the exact loopback path", async () => {
     const setup = await startSetupPageServer({ browser: "chrome", extensionPath: "/tmp/BrowseWeave extension" });
     try {
@@ -179,6 +196,33 @@ describe("one-click local setup page", () => {
       expect(await readFile(ticketPath, "utf8")).toContain("\n  \"version\"");
     } finally {
       await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("removes only a copy it created, so relocating cannot leave two enabled copies", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "browseweave-relocate-"));
+    const source = path.join(root, "source");
+    const oldParent = path.join(root, "old");
+    const foreignParent = path.join(root, "foreign");
+    await mkdir(source);
+    await writeFile(path.join(source, "manifest.json"), '{"name":"BrowseWeave"}\n', "utf8");
+    try {
+      await prepareManagedExtension({ sourcePath: source, stableParent: oldParent, target: "chromium-mv3", version: "0.1.0" });
+      expect(await removeManagedExtensionCopy(oldParent, "chromium-mv3")).toBe(true);
+      await expect(stat(path.join(oldParent, "chromium-mv3"))).rejects.toThrow();
+      // Removing again is harmless once the copy is gone.
+      expect(await removeManagedExtensionCopy(oldParent, "chromium-mv3")).toBe(false);
+
+      // A directory BrowseWeave did not create is never deleted, even if it
+      // sits exactly where a managed copy would.
+      await mkdir(path.join(foreignParent, "chromium-mv3"), { recursive: true });
+      await writeFile(path.join(foreignParent, "chromium-mv3", "manifest.json"), "{}\n", "utf8");
+      expect(await removeManagedExtensionCopy(foreignParent, "chromium-mv3")).toBe(false);
+      expect(await readFile(path.join(foreignParent, "chromium-mv3", "manifest.json"), "utf8")).toBe("{}\n");
+
+      expect(await removeManagedExtensionCopy("relative/path", "chromium-mv3")).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 

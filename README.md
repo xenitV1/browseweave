@@ -23,7 +23,14 @@ The MCP transport is client-neutral. Automatic configuration is currently implem
 - Capture the visible viewport when layout, images, canvas, or an ambiguous state matters.
 - Use short-lived screenshot-bound coordinates for custom widgets that have no semantic reference.
 - Heuristically detect supported sensitive-action patterns—such as messages, publishing, payments, deletion, credentials, 2FA, and security changes—and pause detected actions for human approval.
+- Attach a local file to a page's file input, if the user has allowed its directory, without opening the operating-system file picker.
 - Connect more than one browser profile without mixing their tab IDs or approval keys.
+
+Attaching a file sends it from the computer to a website, so it is off by default, always requires an extension-signed human confirmation showing the exact basename, size, MIME type, SHA-256, and browser-verified site, and only reads from directories the user listed in an owner-only `policy.json`. Hidden paths, multiple-hardlink aliases, known credential filenames and key formats, private-key content, unsupported file types, and BrowseWeave's own state are refused. A denylist cannot recognize every renamed or archived secret, so the path allowlist and exact-file approval remain mandatory.
+
+```json
+{ "file_attach": { "enabled": true, "allowed_directories": ["/absolute/path/to/Documents"] } }
+```
 
 BrowseWeave controls permitted content inside ordinary HTTP(S) pages. It does not control browser menus, browser settings pages, extension-store pages, operating-system dialogs, file pickers, hardware security-key dialogs, or other privileged surfaces.
 
@@ -86,7 +93,19 @@ Edge, Brave, Vivaldi, Firefox, Safari, remote MCP transports, and hosted browser
 
 Prerequisites: a systemd-based Linux desktop where `systemctl --user` works, Node.js 22.14.0 or newer, a visible interactive terminal, and Chrome 116+ or a Zen release based on Firefox 142+. Non-systemd distributions are not supported by this beta installer. The command deliberately refuses a background pipe or hidden non-interactive shell because the browser consent must remain visible.
 
-Pin both the package version and the requested browser/client. For example:
+The currently published beta remains version-pinned. In this source checkout,
+the new all-browser flow prepares every detected supported browser and every
+detected supported MCP client in one run:
+
+```bash
+./scripts/setup-all.sh
+```
+
+BrowseWeave processes the browsers sequentially so each short-lived pairing
+session and browser-owned approval remains unambiguous. After this change ships
+in the next npm beta, the packaged CLI exposes the same flow as
+`setup --all-browsers`. To use the current published beta or target only one
+browser/client combination instead:
 
 ```bash
 npx browseweave@0.1.0-beta.2 setup --browser chrome --client codex
@@ -101,9 +120,17 @@ npx browseweave@0.1.0-beta.2 setup --browser chrome --new-profile --client codex
 npx browseweave@0.1.0-beta.2 setup --browser chrome --client opencode --opencode-v2
 ```
 
-`--browser` accepts `chrome` or `zen`. If it is omitted, setup prefers Chrome when both browsers are present; specify the flag to avoid an unintended choice. For a portable or nonstandard installation, pair it with a safe absolute `--browser-path`. Use `--new-profile` only when the same browser family is already connected and you intentionally want to pair another profile.
+`--all-browsers` detects all currently supported installed browser applications
+(Google Chrome and Zen) and prepares each one in sequence. It cannot be combined
+with `--browser` or `--browser-path`. `--browser` accepts `chrome` or `zen`; if
+both browser-selection flags are omitted, setup preserves the single-browser
+behavior and prefers Chrome. For a portable or nonstandard installation, pair
+one explicit browser with a safe absolute `--browser-path`. Use `--new-profile`
+only when the same browser family is already connected and you intentionally
+want to pair another profile. All-browser mode covers browser applications, not
+every profile inside them.
 
-Repeat `--client` to configure any requested combination of `codex`, `claude-code`, `cursor`, and `opencode`. If no client is specified, setup attempts every supported client it detects; explicit flags are safer. BrowseWeave preserves unrelated configuration and stops rather than overwriting an ambiguous or foreign `browseweave` entry. For another local stdio MCP client, print a generic entry and adapt it manually to that client's current official schema:
+Repeat `--client` to configure any requested combination of `codex`, `claude-code`, `cursor`, and `opencode`. If no client is specified, setup attempts every supported client it detects; explicit flags are safer. Client registration is completed before browser enrollment and launches a trusted npm invocation of `browseweave@latest`. BrowseWeave may replace only an exact older entry from its verified persistent runtime; it preserves unrelated configuration and stops rather than overwriting an ambiguous or foreign `browseweave` entry. For another local stdio MCP client, print a generic entry and adapt it manually to that client's current official schema:
 
 ```bash
 npx browseweave@0.1.0-beta.2 mcp-config generic
@@ -118,16 +145,18 @@ npx browseweave@0.1.0-beta.2 mcp-add opencode --opencode-v2
 
 Use the same flag with `setup --client opencode`. V1 adds the server directly under `mcp` with `enabled: true`. V2 adds it under `mcp.servers` with `disabled: false` and preserves a sibling `mcp.timeout` block. A missing configuration file is created safely; a mixed, mismatched, or foreign configuration is left untouched. These layouts follow the current official [OpenCode V1 MCP documentation](https://dev.opencode.ai/docs/mcp-servers/) and [OpenCode V2 MCP documentation](https://opencode.ai/v2/docs/mcp-servers).
 
-This is a **guided one-command setup**, not a silent browser-extension install. The command:
+This is a **guided one-command setup**, not a silent browser-extension install. In
+all-browser mode the browser-specific steps repeat sequentially, while runtime,
+service, and MCP configuration remain shared. The command:
 
-1. installs and verifies a persistent per-user runtime, background service, and narrow native reconnect helper without `sudo`;
-2. opens the selected browser's extension-management screen and a private loopback setup page;
-3. reveals the exact managed extension folder or manifest while the user completes the browser-required load;
-4. waits for the user to return to the private setup page and select **Connect this browser**—not the extension Settings button—for initial enrollment;
-5. exchanges a short-lived setup capability between that page, the extension, and the local daemon without displaying a pairing key;
-6. verifies that the extension stored the credential and completed a normal authenticated reconnect;
-7. after Chrome has saved the unpacked extension, discovers only the single enabled byte-exact BrowseWeave identity and registers that exact `chrome-extension://<id>/` origin; and
-8. registers each selected MCP client against the persistent runtime.
+1. registers every selected MCP client to a trusted `browseweave@latest` npm invocation before browser-owned consent begins;
+2. installs and verifies the persistent per-user runtime, background service, and narrow native reconnect helper without `sudo`;
+3. opens each selected browser's extension-management screen and a private loopback setup page;
+4. reveals the exact managed extension folder or manifest, in a short visible directory under your home folder, and opens it in your file manager while you complete the browser-required load;
+5. waits for the user to return to the private setup page and select **Connect this browser**—not the extension Settings button—for initial enrollment;
+6. exchanges a short-lived setup capability between that page, the extension, and the local daemon without displaying a pairing key;
+7. verifies that the extension stored the credential and completed a normal authenticated reconnect; and
+8. after Chrome has saved the unpacked extension, discovers only the single enabled byte-exact BrowseWeave identity and registers that exact `chrome-extension://<id>/` origin.
 
 The extension Settings button labeled **Connect BrowseWeave** is a later repair/reconnect path through native messaging. It is not the initial guided-setup button.
 
@@ -159,10 +188,12 @@ Then return to settings and select **Connect BrowseWeave** again. Do not install
 
 ### Required browser approval
 
+Setup keeps the unpacked extension in `BrowseWeave` inside your home folder — `BrowseWeave/chromium-mv3` for Chrome and `BrowseWeave/firefox-mv2` for Zen — and opens that folder in your file manager. It deliberately does not live under a hidden directory such as `~/.local/share`, because desktop file pickers do not show those without an unhide shortcut.
+
 Chrome requires these user actions:
 
 1. Turn on **Developer mode** in `chrome://extensions`.
-2. Select **Load unpacked**.
+2. Select **Load unpacked**, or simply drag the opened folder onto the `chrome://extensions` page.
 3. Choose the folder opened or printed by setup.
 
 Zen requires these user actions:
@@ -172,6 +203,12 @@ Zen requires these user actions:
 3. Choose `manifest.json` in the folder opened or printed by setup.
 
 The unsigned Zen development add-on is temporary and is removed when the browser restarts. A persistent public Firefox-family installation requires a future Mozilla-signed release. Chrome Web Store and Mozilla signing are separate release gates; BrowseWeave does not bypass browser consent or managed-install policies.
+
+These developer builds cannot be reduced to a single **Add/Approve** prompt by a
+local script. Official Google Chrome builds no longer accept command-line loading
+of unpacked extensions, and normal Firefox-family end-user installation requires
+a Mozilla-signed add-on. Once signed store releases exist, setup can open their
+listing/install prompts and leave only the browser-owned approval to the user.
 
 After setup prints **BrowseWeave setup is complete**, start a new MCP-client session and call `browser_status`. A saved client configuration is not evidence that the current client session loaded the server.
 
@@ -190,6 +227,17 @@ node dist/src/cli.js setup --from-source --browser chrome --client codex
 ```
 
 Use `--browser zen` for Zen and repeat `--client` when testing more than one supported MCP client. The build also creates `extension/dist/chromium-mv3` and `extension/dist/firefox-mv2`; packaged ZIP/XPI artifacts are created by `npm run package:extension`.
+
+For a complete source-checkout bootstrap that installs the exact locked npm
+dependencies, builds the project, detects both supported browsers, and configures
+all detected clients, run this in a visible terminal:
+
+```bash
+./scripts/setup-all.sh
+```
+
+The script still leaves browser extension loading, **Connect this browser**, and
+any operating-system prompt to the human.
 
 ### Manual browser loading and diagnostics
 
@@ -219,6 +267,12 @@ npx browseweave@0.1.0-beta.2 local-uninstall
 Only when the user explicitly wants those local application directories deleted, add `--purge-data`. Then remove BrowseWeave separately from Chrome or Zen to clear browser-owned extension storage. Purge deliberately preserves Zen's browser-profile portal preference.
 
 ## Human approval and site-respectful operation
+
+Approval normally happens in the browser extension. Optionally, the browser owner may allow a narrower path where the human confirms in the AI client session instead, by typing a phrase BrowseWeave generates. It is off by default, covers only form submissions, message/publish actions, and off-site navigation, and requires enabling it in **both** an owner-only `policy.json` and extension Settings. Payments, deletion, credentials, two-factor codes, account-security changes, and coordinate clicks always stay in the extension. It is deliberately weaker than the default: it trusts the AI client to relay what the human actually typed. Read [SECURITY.md](SECURITY.md#session-confirmed-approval-and-what-it-changes) before enabling it.
+
+```json
+{ "session_approval": { "enabled": true, "risks": ["form_submit", "message", "external_navigation"] } }
+```
 
 BrowseWeave applies this approval flow only when its supported heuristics classify a requested action as sensitive. Those heuristics can produce false positives and false negatives; they do not guarantee that every risky action will be detected. For an action that is detected, BrowseWeave sends the action details to the target browser extension, shows them in extension-owned UI, and accepts only a signed, short-lived, single-use decision. If the page, target, tab, parameters, or live target fingerprint changes, the old approval is invalid. The UI shows the browser-verified current pre-action destination; page JavaScript, server behavior, or a later redirect can still change the final destination. This reduces risk but is not a complete safety guarantee.
 

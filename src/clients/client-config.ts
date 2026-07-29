@@ -1,7 +1,6 @@
 import { constants as fsConstants, type FileHandle, link, lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import {
   applyEdits,
   modify as modifyJsonc,
@@ -10,6 +9,7 @@ import {
   type Node as JsoncNode,
   type ParseError
 } from "jsonc-parser";
+import { trustedNpmInvocation } from "./npm-invocation.js";
 
 export const MCP_SERVER_NAME = "browseweave" as const;
 
@@ -72,12 +72,17 @@ export function validateMcpLaunchSpec(spec: McpLaunchSpec): McpLaunchSpec {
   };
 }
 
-export function defaultMcpLaunchSpec(): McpLaunchSpec {
-  return validateMcpLaunchSpec({
-    command: process.execPath,
-    args: [fileURLToPath(new URL("../mcp.js", import.meta.url))],
-    env: {}
-  });
+/** Resolve a trusted npm beside the active Node runtime and always launch the current latest package. */
+export async function defaultMcpLaunchSpec(): Promise<McpLaunchSpec> {
+  const invocation = await trustedNpmInvocation([
+    "exec",
+    "--yes",
+    "--package=browseweave@latest",
+    "--",
+    "browseweave",
+    "mcp"
+  ]);
+  return validateMcpLaunchSpec({ command: invocation.command, args: invocation.args, env: {} });
 }
 
 function stdioEntry(spec: McpLaunchSpec): Record<string, unknown> {
@@ -94,7 +99,7 @@ function openCodeEntry(spec: McpLaunchSpec, version: 1 | 2): Record<string, unkn
 
 export function clientSetup(
   client: SupportedMcpClient,
-  rawSpec: McpLaunchSpec = defaultMcpLaunchSpec(),
+  rawSpec: McpLaunchSpec,
   opencodeVersion?: 1 | 2
 ): ClientSetup {
   const spec = validateMcpLaunchSpec(rawSpec);
@@ -525,7 +530,11 @@ export async function readStrictJsonConfig(filePath: string): Promise<unknown> {
   return (await readJsonFileSafely(filePath, false)).value;
 }
 
-export async function mergeCursorConfig(filePath: string, rawSpec: McpLaunchSpec): Promise<ConfigMergeResult> {
+export async function mergeCursorConfig(
+  filePath: string,
+  rawSpec: McpLaunchSpec,
+  replaceableSpecs: readonly McpLaunchSpec[] = []
+): Promise<ConfigMergeResult> {
   const spec = validateMcpLaunchSpec(rawSpec);
   const original = await readJsonFileSafely(filePath, true);
   if (!isRecord(original.value)) throw new Error("Cursor configuration root must be an object.");
@@ -536,7 +545,8 @@ export async function mergeCursorConfig(filePath: string, rawSpec: McpLaunchSpec
   const servers = currentServers ?? {};
   const expected = stdioEntry(spec);
   const existing = servers[MCP_SERVER_NAME];
-  if (existing !== undefined && !deepExact(existing, expected)) {
+  const replaceable = replaceableSpecs.some((candidate) => deepExact(existing, stdioEntry(validateMcpLaunchSpec(candidate))));
+  if (existing !== undefined && !deepExact(existing, expected) && !replaceable) {
     throw new Error("Cursor already contains a foreign browseweave MCP entry; it was not changed.");
   }
   if (deepExact(existing, expected)) return { path: filePath, status: "unchanged" };
@@ -628,7 +638,8 @@ function openCodeServersForVersion(value: Record<string, unknown>, version: 1 | 
 export async function mergeOpenCodeConfig(
   filePath: string,
   rawSpec: McpLaunchSpec,
-  version: 1 | 2
+  version: 1 | 2,
+  replaceableSpecs: readonly McpLaunchSpec[] = []
 ): Promise<ConfigMergeResult> {
   if (version !== 1 && version !== 2) {
     throw new Error("OpenCode V1 or V2 must be selected before configuration is written.");
@@ -640,7 +651,10 @@ export async function mergeOpenCodeConfig(
   const servers = openCodeServersForVersion(original.value, version);
   const expected = openCodeEntry(spec, version);
   const existing = servers[MCP_SERVER_NAME];
-  if (existing !== undefined && !deepExact(existing, expected)) {
+  const replaceable = replaceableSpecs.some((candidate) => (
+    deepExact(existing, openCodeEntry(validateMcpLaunchSpec(candidate), version))
+  ));
+  if (existing !== undefined && !deepExact(existing, expected) && !replaceable) {
     throw new Error("OpenCode already contains a foreign browseweave MCP entry; it was not changed.");
   }
   if (deepExact(existing, expected)) {

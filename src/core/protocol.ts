@@ -10,6 +10,8 @@ export const SHA256_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 export const INSTALLATION_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 export const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/u;
 export const SETUP_ID_PATTERN = /^[a-f0-9]{24}$/u;
+/** Base64 expansion of the 8 MiB attachment cap plus command-envelope headroom. */
+export const MAX_EXTENSION_INCOMING_MESSAGE_BYTES = 12 * 1024 * 1024;
 
 export const BROWSER_ACTIONS = [
   "list_tabs",
@@ -23,6 +25,7 @@ export const BROWSER_ACTIONS = [
   "fill_form",
   "credential_handoff_prepare",
   "credential_fill",
+  "attach_file",
   "press",
   "scroll",
   "navigate",
@@ -38,6 +41,39 @@ export const BROWSER_ACTIONS = [
 export type BrowserAction = (typeof BROWSER_ACTIONS)[number];
 export type BrowserFamily = "firefox" | "chromium";
 export type ApprovalDecision = "approve" | "reject";
+
+/**
+ * Where the authority for an approved command came from. `extension_signed` is
+ * the default: the extension signed a decision with its non-exportable key and
+ * holds a matching one-time grant. `session` means a human confirmed in the MCP
+ * client session instead, which rests on the weaker assumption that the client
+ * relays human input honestly, so it is limited to the risk classes below and
+ * requires a separate opt-in in extension-owned settings.
+ */
+export type ApprovalSource = "extension_signed" | "session";
+
+/**
+ * Risk classes a human may confirm from the MCP session. Everything else —
+ * payment, deletion, credentials, two-factor, account security, and every
+ * semantic-free coordinate click — always requires the extension-signed
+ * decision. Both the daemon and the extension read this one list.
+ */
+export const SESSION_APPROVABLE_RISKS = ["form_submit", "message", "external_navigation"] as const;
+
+export type SessionApprovableRisk = (typeof SESSION_APPROVABLE_RISKS)[number];
+
+const SESSION_APPROVABLE_RISK_SET: ReadonlySet<string> = new Set(SESSION_APPROVABLE_RISKS);
+
+export function isSessionApprovableRisk(value: unknown): value is SessionApprovableRisk {
+  return typeof value === "string" && SESSION_APPROVABLE_RISK_SET.has(value);
+}
+
+/** Four lowercase words separated by single spaces. */
+export const SESSION_CHALLENGE_PATTERN = /^[a-z]{3,8}(?: [a-z]{3,8}){3}$/u;
+
+export function normalizeSessionChallenge(value: unknown): string {
+  return typeof value === "string" ? value.toLowerCase().replace(/\s+/gu, " ").trim() : "";
+}
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -205,14 +241,28 @@ export interface ExtensionUnapprovedCommand extends ExtensionCommandBase {
 }
 
 export interface ExtensionApprovedCommand extends ExtensionCommandBase {
-  /** True only after a matching one-time extension-signed decision is consumed. */
+  /** True only after a matching one-time decision from `approval_source` is consumed. */
   approved: true;
-  /** Must match a still-live extension-owned grant created by the popup decision. */
+  /**
+   * For `extension_signed` this must match a still-live extension-owned grant
+   * created by the popup decision. For `session` no such grant exists, so the
+   * extension instead requires its own opt-in, an unreplayed approval ID, and a
+   * live risk class that is session-approvable.
+   */
   approval_id: string;
   approval_fingerprint: string;
+  approval_source: ApprovalSource;
 }
 
 export type ExtensionCommand = ExtensionUnapprovedCommand | ExtensionApprovedCommand;
+
+/** Exact local-file identity shown by the trusted extension approval UI. */
+export interface ApprovalFileIdentity extends JsonObject {
+  name: string;
+  mime_type: string;
+  sha256: string;
+  size: number;
+}
 
 export interface ExtensionApprovalRequest {
   type: "approval_request";
@@ -229,6 +279,8 @@ export interface ExtensionApprovalRequest {
   params_sha256: string;
   approval_fingerprint: string;
   expires_at: string;
+  /** Required only for attach_file; derived from the exact bytes in params_sha256. */
+  file?: ApprovalFileIdentity;
 }
 
 export interface ExtensionApprovalResolved {
@@ -341,6 +393,12 @@ export interface ApprovalRequiredResult extends JsonObject {
   action: BrowserAction;
   expires_at: string;
   message: string;
+  /**
+   * Whether this approval may instead be confirmed in the MCP session. The
+   * confirmation phrase is deliberately absent here: it is issued only over
+   * authenticated IPC to the MCP server and never enters a tool result.
+   */
+  session_approval_available: boolean;
 }
 
 export interface ConnectedBrowserSummary extends JsonObject {

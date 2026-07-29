@@ -7,6 +7,7 @@ import {
   claudeProjectRegistrationState,
   clientSetup,
   codexRegistrationState,
+  defaultMcpLaunchSpec,
   mergeCursorConfig,
   mergeOpenCodeConfig,
   parseStrictJson,
@@ -19,6 +20,11 @@ import {
 const spec: McpLaunchSpec = {
   command: "/opt/BrowseWeave Runtime/node",
   args: ['/opt/BrowseWeave App/mcp "global".js'],
+  env: {}
+};
+const legacySpec: McpLaunchSpec = {
+  command: "/opt/Legacy BrowseWeave/node",
+  args: ["/opt/Legacy BrowseWeave/node_modules/browseweave/dist/src/mcp.js"],
   env: {}
 };
 
@@ -35,6 +41,15 @@ afterEach(async () => {
 });
 
 describe("vendor-neutral MCP client setup", () => {
+  it("generates a trusted npm invocation pinned to browseweave@latest", async () => {
+    const latest = await defaultMcpLaunchSpec();
+    expect(path.isAbsolute(latest.command)).toBe(true);
+    expect(latest.args.slice(-6)).toEqual([
+      "exec", "--yes", "--package=browseweave@latest", "--", "browseweave", "mcp"
+    ]);
+    expect(latest.env).toEqual({});
+  });
+
   it("builds argument arrays for Codex and Claude Code without shell quoting", () => {
     expect(clientSetup("codex", spec).command).toEqual([
       "codex", "mcp", "add", "browseweave", "--", spec.command, ...spec.args
@@ -150,6 +165,19 @@ describe("safe direct MCP configuration merges", () => {
     }
   });
 
+  it("replaces only an explicitly verified older BrowseWeave Cursor entry", async () => {
+    const directory = await temporaryDirectory();
+    const configPath = path.join(directory, "mcp.json");
+    await writeFile(configPath, JSON.stringify({
+      mcpServers: { browseweave: { command: legacySpec.command, args: legacySpec.args, env: {} } }
+    }));
+    await expect(mergeCursorConfig(configPath, spec)).rejects.toThrow(/foreign browseweave/iu);
+    expect(await mergeCursorConfig(configPath, spec, [legacySpec])).toMatchObject({ status: "updated" });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      mcpServers: { browseweave: { command: spec.command, args: spec.args, env: {} } }
+    });
+  });
+
   it("merges the explicitly selected OpenCode schema without guessing from server names", async () => {
     const directory = await temporaryDirectory();
     const v1Path = path.join(directory, "v1.json");
@@ -195,6 +223,19 @@ describe("safe direct MCP configuration merges", () => {
     });
     expect(JSON.parse(await readFile(v2Path, "utf8"))).toEqual({
       mcp: { servers: { browseweave: { type: "local", command: [spec.command, ...spec.args], disabled: false } } }
+    });
+  });
+
+  it("replaces only an explicitly verified older BrowseWeave OpenCode entry", async () => {
+    const directory = await temporaryDirectory();
+    const configPath = path.join(directory, "opencode.json");
+    await writeFile(configPath, JSON.stringify({
+      mcp: { browseweave: { type: "local", command: [legacySpec.command, ...legacySpec.args], enabled: true } }
+    }));
+    await expect(mergeOpenCodeConfig(configPath, spec, 1)).rejects.toThrow(/foreign browseweave/iu);
+    expect(await mergeOpenCodeConfig(configPath, spec, 1, [legacySpec])).toMatchObject({ status: "updated" });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      mcp: { browseweave: { type: "local", command: [spec.command, ...spec.args], enabled: true } }
     });
   });
 

@@ -14,21 +14,27 @@ import {
   classifyRisk,
   externalNavigationRisk,
   approvalFingerprint,
+  fillBatchKeystrokeIntervalMs,
   isStableRef,
+  keystrokeIntervalMs,
   mapVisualCoordinates,
   normalizeSnapshotOptions,
   normalizeText,
   normalizeViewportState,
   normalizeWaitOptions,
+  pointerApproachPoints,
   sameViewportState,
+  scrollStepDeltas,
   sensitiveFieldCategory,
   sensitivePressDecision,
   stableSafetyMaterial,
   validateFillValue,
+  type PointerPoint,
   type RiskAssessment,
   type ValidatedFillValue,
   type ViewportState
 } from "../shared/pure";
+import { isSessionApprovableRisk, type ApprovalSource } from "../../../src/core/protocol";
 import {
   safeCredentialLabel,
   scrubCredentialValues,
@@ -65,6 +71,7 @@ interface ContentRequest {
   approval_fingerprint?: string;
   revalidate_only?: boolean;
   approval_context?: { tab_id: number; frame_id: number };
+  approval_source?: ApprovalSource;
 }
 
 interface ContentResult {
@@ -416,6 +423,19 @@ async function guardRisks(targets: RiskTarget[], request: ContentRequest): Promi
     );
   }
 
+  // A session-confirmed approval rests on the MCP client relaying human input
+  // honestly, so it is checked against the risk assessed live here rather than
+  // against any class the daemon claimed. Tier A can never arrive this way.
+  if (request.approved === true && request.approval_source === "session") {
+    const blocked = assessed.find(({ risk }) => !isSessionApprovableRisk(risk.category));
+    if (blocked) {
+      throw new ContentError(
+        "session_approval_not_permitted",
+        `A ${blocked.risk.category} action requires approval in the browser extension and cannot be confirmed in the session. Nothing was executed.`
+      );
+    }
+  }
+
   const context = request.approval_context || { tab_id: -1, frame_id: -1 };
   const fingerprint = await approvalFingerprint({
     version: 1,
@@ -506,6 +526,37 @@ function dispatchMouse(element: Element, type: string, button = 0): void {
   }));
 }
 
+/** Last position this document's synthetic pointer reached, for movement paths. */
+let lastPointerPoint: PointerPoint | undefined;
+
+/**
+ * Emits a short movement path ending exactly on the target. Menus and other
+ * hover-driven widgets frequently gate on movement rather than on a bare
+ * `pointerover`, so entering without a path leaves their content unopened and
+ * therefore missing from the next snapshot.
+ */
+function approachPointer(element: Element, x: number, y: number): void {
+  const from = lastPointerPoint ?? { x: Math.max(0, x - 48), y: Math.max(0, y - 36) };
+  for (const point of pointerApproachPoints(from, { x, y })) {
+    dispatchPointerAt(element, "pointermove", point.x, point.y, 0);
+    dispatchMouseAt(element, "mousemove", point.x, point.y, 0);
+  }
+  lastPointerPoint = { x, y };
+}
+
+function approachPointerToElement(element: Element): void {
+  const rect = element.getBoundingClientRect();
+  approachPointer(element, rect.left + rect.width / 2, rect.top + rect.height / 2);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise<void>((resolve) => { setTimeout(resolve, milliseconds); });
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
+}
+
 function rejectUnsupportedClickTarget(element: Element): void {
   const labelledControl = composedClosest(element, "label") instanceof HTMLLabelElement
     ? (composedClosest(element, "label") as HTMLLabelElement).control
@@ -543,6 +594,8 @@ function clickElement(
     : 1;
   (element as HTMLElement).scrollIntoView({ block: "center", inline: "center", behavior: "auto" });
   (element as HTMLElement).focus({ preventScroll: true });
+  safetyCheck();
+  approachPointerToElement(element);
   safetyCheck();
 
   for (let index = 0; index < clickCount; index += 1) {
@@ -612,6 +665,7 @@ function hoverElement(element: Element): Record<string, unknown> {
   const rect = element.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
   const y = rect.top + rect.height / 2;
+  approachPointer(element, x, y);
   dispatchPointerAt(element, "pointerover", x, y, 0);
   dispatchMouseAt(element, "mouseover", x, y, 0);
   dispatchPointerAt(element, "pointerenter", x, y, 0);
@@ -729,7 +783,8 @@ async function typeIntoElement(
   element: Element,
   text: string,
   clear: boolean,
-  safetyCheck: () => void = () => undefined
+  safetyCheck: () => void = () => undefined,
+  maximumKeystrokeIntervalMs = Number.POSITIVE_INFINITY
 ): Promise<Record<string, unknown>> {
   ensureVisible(element);
   if (!isEditable(element)) {
@@ -773,6 +828,10 @@ async function typeIntoElement(
     } else if (clear) {
       value = "";
     }
+    const keystrokeInterval = Math.min(
+      keystrokeIntervalMs(text.length),
+      Math.max(0, Math.trunc(maximumKeystrokeIntervalMs))
+    );
     for (const character of text) {
       safetyCheck();
       emitKeyboard(element, "keydown", character);
@@ -786,6 +845,12 @@ async function typeIntoElement(
         dispatchInput(element, "insertText", character);
       }
       emitKeyboard(element, "keyup", character);
+      if (keystrokeInterval > 0) {
+        // Yields to the page's event loop so debounced and asynchronous
+        // per-keystroke handlers observe intermediate values.
+        await delay(keystrokeInterval);
+        safetyCheck();
+      }
     }
     element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     return { ref: registry.refFor(element), typed: true, length: text.length };
@@ -861,10 +926,11 @@ function prepareFillTarget(element: Element, value: unknown, clear: boolean): {
 
 async function applyPreparedFill(
   field: ReturnType<typeof prepareFillTarget>,
-  safetyCheck: () => void = () => undefined
+  safetyCheck: () => void = () => undefined,
+  maximumKeystrokeIntervalMs = Number.POSITIVE_INFINITY
 ): Promise<Record<string, unknown>> {
   if (field.value.kind === "text") {
-    return typeIntoElement(field.element, field.value.text, field.clear, safetyCheck);
+    return typeIntoElement(field.element, field.value.text, field.clear, safetyCheck, maximumKeystrokeIntervalMs);
   }
   const input = field.element as HTMLInputElement;
   const desired = field.value.kind === "checkbox" ? field.value.checked : true;
@@ -1042,8 +1108,21 @@ async function scrollPage(payload: Record<string, unknown>): Promise<Record<stri
   const maximumY = Math.max(0, container.scrollHeight - container.clientHeight);
   const nextX = boundedScroll(container.scrollLeft, maximumX, delta[0]);
   const nextY = boundedScroll(container.scrollTop, maximumY, delta[1]);
+  // Stepping the offset lets IntersectionObserver, infinite-scroll, and
+  // virtualised-list handlers run for the traversed region instead of being
+  // skipped by a single jump.
+  const stepsX = scrollStepDeltas(nextX.appliedDelta);
+  const stepsY = scrollStepDeltas(nextY.appliedDelta);
+  let stepX = container.scrollLeft;
+  let stepY = container.scrollTop;
+  for (let index = 0; index < Math.max(stepsX.length, stepsY.length); index += 1) {
+    stepX += stepsX[index] ?? 0;
+    stepY += stepsY[index] ?? 0;
+    container.scrollTo({ left: stepX, top: stepY, behavior: "auto" });
+    await nextAnimationFrame();
+  }
   container.scrollTo({ left: nextX.position, top: nextY.position, behavior: "auto" });
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await nextAnimationFrame();
   const documentContainer = container === document.scrollingElement || container === document.documentElement || container === document.body;
   return {
     container_ref: documentContainer ? "document" : registry.refFor(container),
@@ -1369,6 +1448,97 @@ async function credentialApply(payload: Record<string, unknown>): Promise<Record
   };
 }
 
+interface AttachableFilePayload {
+  name: string;
+  mime_type: string;
+  sha256: string;
+  size: number;
+  base64: string;
+}
+
+function parseAttachableFile(value: unknown): AttachableFilePayload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ContentError("attach_file_invalid", "The file to attach was not supplied correctly.");
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.name !== "string" || record.name.length === 0 || record.name.length > 255 ||
+    /[/\\\0]/u.test(record.name) ||
+    typeof record.mime_type !== "string" || !/^[\w.+-]+\/[\w.+-]+$/u.test(record.mime_type) ||
+    typeof record.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(record.sha256) ||
+    typeof record.size !== "number" || !Number.isSafeInteger(record.size) || record.size < 0 ||
+    typeof record.base64 !== "string" || !/^[A-Za-z0-9+/=]*$/u.test(record.base64)
+  ) {
+    throw new ContentError("attach_file_invalid", "The file to attach was not supplied correctly.");
+  }
+  return record as unknown as AttachableFilePayload;
+}
+
+function decodeBase64Bytes(base64: string): Uint8Array<ArrayBuffer> {
+  const binary = globalThis.atob(base64);
+  const bytes = new Uint8Array(new ArrayBuffer(binary.length));
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function fileInputForAttachment(element: Element): HTMLInputElement {
+  if (element instanceof HTMLInputElement && element.type === "file") return element;
+  const labelled = composedClosest(element, "label");
+  if (labelled instanceof HTMLLabelElement && labelled.control instanceof HTMLInputElement && labelled.control.type === "file") {
+    return labelled.control;
+  }
+  throw new ContentError(
+    "attach_file_target_invalid",
+    "That element is not a file input. Take a fresh snapshot and use the ref of the file field itself."
+  );
+}
+
+/**
+ * Places a file into a form without going near the operating-system picker,
+ * which no extension can drive and which would block the tab if opened. The
+ * file is assigned through a DataTransfer, exactly as a drag-and-drop upload
+ * would deliver it, then the page is notified with input and change.
+ */
+async function attachFile(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const element = elementForRef(payload.ref);
+  const input = fileInputForAttachment(element);
+  if (input.disabled) throw new ContentError("attach_file_target_invalid", "That file input is disabled.");
+  ensureVisible(input);
+
+  const spec = parseAttachableFile(payload.file);
+  const bytes = decodeBase64Bytes(spec.base64);
+  if (bytes.byteLength !== spec.size) {
+    throw new ContentError("attach_file_invalid", "The attached file did not arrive intact.");
+  }
+  const file = new File([bytes], spec.name, { type: spec.mime_type, lastModified: Date.now() });
+  const transfer = new DataTransfer();
+  transfer.items.add(file);
+
+  input.focus({ preventScroll: true });
+  try {
+    input.files = transfer.files;
+  } catch (error) {
+    throw new ContentError(
+      "attach_file_rejected",
+      `The page did not accept the attached file: ${error instanceof Error ? error.message : "unknown error"}`
+    );
+  }
+  if (input.files?.length !== 1 || input.files[0]?.name !== spec.name) {
+    throw new ContentError("attach_file_rejected", "The page did not retain the attached file.");
+  }
+  dispatchInput(input, "insertReplacementText", null);
+  input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+  return {
+    ref: registry.refFor(input),
+    attached: true,
+    file_name: spec.name,
+    mime_type: spec.mime_type,
+    size: spec.size,
+    sha256: spec.sha256
+  };
+}
+
 async function approvalTargetProbe(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   const material = {
     version: 1,
@@ -1431,6 +1601,24 @@ async function execute(request: ContentRequest): Promise<unknown> {
     case "hover": {
       const element = elementForRef(payload.ref);
       return hoverElement(element);
+    }
+    case "attach_file": {
+      const input = fileInputForAttachment(elementForRef(payload.ref));
+      // Attaching a local file is unconditionally sensitive; it is never left
+      // to the heuristics, in the same way a semantic-free coordinate click is
+      // never left to them.
+      const targets: RiskTarget[] = [{
+        action: "attach_file",
+        element: input,
+        forcedRisk: { category: "file_attach", reason: "Attaching a local file to this page" },
+        context: {
+          file_name: normalizeText((payload.file as Record<string, unknown> | undefined)?.name, 160),
+          sha256: normalizeText((payload.file as Record<string, unknown> | undefined)?.sha256, 64)
+        }
+      }];
+      const guard = await guardRisks(targets, request);
+      assertRiskTargetsUnchanged(targets, guard);
+      return attachFile(payload);
     }
     case "click_at": {
       const captureViewport = expectedCaptureViewport(payload);
@@ -1517,6 +1705,18 @@ async function execute(request: ContentRequest): Promise<unknown> {
       const fields = validateFillBatchFields(payload.fields);
       const initialPrepared = prepareFillBatch(fields);
       const expectedBatchMaterial = stableSafetyMaterial(fillBatchMaterial(fields, initialPrepared));
+      const maximumKeystrokeInterval = fillBatchKeystrokeIntervalMs(initialPrepared.map((field) => (
+        field.value.kind === "text" ? field.value.text.length : 0
+      )));
+      const fillDeadline = performance.now() + 20_000;
+      const assertFillDeadline = (): void => {
+        if (performance.now() > fillDeadline) {
+          throw new ContentError(
+            "fill_form_time_budget_exceeded",
+            "The form batch stopped before the bridge timeout. Retry only the fields reported as unfinished."
+          );
+        }
+      };
       await guardRisks(initialPrepared.map((field) => ({ action: "fill_form", element: field.element })), request);
       const results: Record<string, unknown>[] = [];
       const completedRefs: string[] = [];
@@ -1526,6 +1726,7 @@ async function execute(request: ContentRequest): Promise<unknown> {
           // reclassify a later target. Re-resolve and re-check the entire batch
           // immediately before every individual write.
           const currentPrepared = prepareFillBatch(fields);
+          assertFillDeadline();
           const currentBatchMaterial = stableSafetyMaterial(fillBatchMaterial(fields, currentPrepared));
           if (currentBatchMaterial !== expectedBatchMaterial) {
             throw new ContentError(
@@ -1539,12 +1740,13 @@ async function execute(request: ContentRequest): Promise<unknown> {
           const current = currentPrepared[index];
           if (!current) throw new ContentError("fill_form_context_changed", "The next form target is no longer available.");
           results.push(await applyPreparedFill(current, () => {
+            assertFillDeadline();
             const latestPrepared = prepareFillBatch(fields);
             if (stableSafetyMaterial(fillBatchMaterial(fields, latestPrepared)) !== expectedBatchMaterial) {
               throw new ContentError("fill_form_context_changed", "The form targets changed during the batch.");
             }
             assertRiskTargetsUnchanged(targets, guard);
-          }));
+          }, maximumKeystrokeInterval));
           completedRefs.push(fields[index]!.ref);
         } catch (error) {
           throw partialFillFailure(error, completedRefs);

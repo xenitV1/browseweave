@@ -21,6 +21,7 @@ interface ApprovalView {
   target_site: string;
   target_title: string;
   destination_origin: string;
+  file?: { name: string; mime_type: string; sha256: string; size: number };
 }
 
 interface HumanInterventionView {
@@ -202,6 +203,18 @@ function renderApprovals(approvals: ApprovalView[]): void {
     const description = document.createElement("p");
     description.className = "approval-description";
     description.textContent = maskUntrustedApprovalDescription(approval.description);
+    const fileIdentity = document.createElement("p");
+    fileIdentity.className = "trusted-file";
+    const validFile = approval.file &&
+      typeof approval.file.name === "string" && typeof approval.file.mime_type === "string" &&
+      typeof approval.file.sha256 === "string" && /^[a-f0-9]{64}$/u.test(approval.file.sha256) &&
+      typeof approval.file.size === "number" && Number.isSafeInteger(approval.file.size) && approval.file.size >= 0;
+    fileIdentity.hidden = !validFile;
+    fileIdentity.textContent = validFile
+      ? `Local file leaving this computer · ${normalizeText(approval.file?.name, 255)} · ` +
+        `${approval.file?.size} bytes · ${normalizeText(approval.file?.mime_type, 192)} · ` +
+        `SHA-256 ${approval.file?.sha256}`
+      : "";
     const expiry = document.createElement("p");
     expiry.className = "expiry";
     expiry.textContent = expiryLabel(approval.expires_at);
@@ -212,7 +225,7 @@ function renderApprovals(approvals: ApprovalView[]): void {
       actionButton("Approve once", "primary", approval.approval_id, "approve"),
       actionButton("Reject", "danger", approval.approval_id, "reject")
     );
-    article.append(heading, trustedTarget, trustedDestination, trustedTitle, warning, description, expiry, controls);
+    article.append(heading, trustedTarget, trustedDestination, trustedTitle, fileIdentity, warning, description, expiry, controls);
     approvalList.append(article);
   }
 }

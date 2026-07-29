@@ -14,8 +14,53 @@ describe("public CLI surface", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(`npx browseweave@${APP_VERSION} setup`);
+    expect(result.stdout).toContain("--all-browsers");
     expect(result.stdout).toContain("Pairing credentials are never printed");
     expect(result.stdout).not.toContain("pairing-token");
+  });
+
+  it("keeps all-browser setup mutually exclusive with a single browser target", () => {
+    const result = spawnSync(process.execPath, [
+      cli,
+      "setup",
+      "--all-browsers",
+      "--browser",
+      "chrome"
+    ], {
+      encoding: "utf8",
+      timeout: 10_000,
+      maxBuffer: 64 * 1024
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Choose either --all-browsers or one explicit --browser target");
+  });
+
+  it("refuses a duplicate all-browser selection before starting setup", () => {
+    const result = spawnSync(process.execPath, [
+      cli,
+      "setup",
+      "--all-browsers",
+      "--all-browsers"
+    ], {
+      encoding: "utf8",
+      timeout: 10_000,
+      maxBuffer: 64 * 1024
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Choose --all-browsers only once");
+  });
+
+  it("accepts all-browser mode only from the required visible terminal", () => {
+    const result = spawnSync(process.execPath, [cli, "setup", "--all-browsers"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      maxBuffer: 64 * 1024
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("visible interactive terminal");
   });
 
   it("rejects the removed legacy display command without printing data", () => {

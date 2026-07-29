@@ -1,27 +1,9 @@
 #!/usr/bin/env node
 
 import {
-  createCipheriv,
-  createHash,
-  createHmac,
-  createPublicKey,
-  hkdfSync,
-  randomBytes,
   randomUUID,
-  timingSafeEqual,
-  verify as verifySignature,
   type KeyObject
 } from "node:crypto";
-import {
-  constants as fsConstants,
-  chmod,
-  lstat,
-  open,
-  readFile,
-  rename,
-  unlink,
-  type FileHandle
-} from "node:fs/promises";
 import {
   createServer,
   type Server as NetServer,
@@ -29,7 +11,6 @@ import {
 } from "node:net";
 import WebSocket, {
   WebSocketServer,
-  type RawData,
   type VerifyClientCallbackSync
 } from "ws";
 import {
@@ -41,7 +22,6 @@ import {
   type DaemonConfig
 } from "../core/config.js";
 import {
-  BASE64URL_PATTERN,
   PROTOCOL_VERSION,
   SETUP_ID_PATTERN,
   SETUP_VERSION,
@@ -54,21 +34,16 @@ import {
   ipcServerProofPayload,
   isApprovalFingerprint,
   isBrowserAction,
-  isInstallationId,
   isJsonObject,
-  isJsonValue,
-  isP256PublicJwk,
-  setupPairingAadPayload,
   setupPairingClientProofPayload,
-  setupPairingKeySalt,
   type ApprovalDecision,
+  type ApprovalSource,
   type ApprovalRequiredResult,
   type BridgeStatus,
   type BrowserAction,
   type BrowserFamily,
   type BrowserIdentity,
   type ConnectedBrowserSummary,
-  type ExtensionApprovalDecision,
   type ExtensionApprovalRequest,
   type ExtensionCommand,
   type ExtensionError,
@@ -84,35 +59,73 @@ import {
   type SetupPairingStatus,
   type SetupAuthenticationPhase
 } from "../core/protocol.js";
+import {
+  ReplayNonceCache,
+  browserIdForInstallation,
+  canonicalFutureExpiry,
+  canonicalJson,
+  deriveInstallationAuthenticationSecret,
+  encryptSetupPairingToken,
+  hasExactFields,
+  hmacProof,
+  isAllowedExtensionOrigin,
+  isCanonicalNonce,
+  isExactP256PublicJwk,
+  originMatchesBrowserFamily,
+  own,
+  jsonObjectWithout,
+  proofMatches,
+  randomBase64Url,
+  sha256
+} from "./crypto.js";
+import {
+  parseBrowserIdentity,
+  parseExtensionResult,
+  parseIpcRequest,
+  publicKeyObject,
+  rawDataToBuffer,
+  verifyP256
+} from "./wire.js";
+import { SafeAuditLogger, UnauthenticatedAuditCoalescer } from "./audit.js";
+import {
+  ExtensionKeyRegistry,
+  MAX_CONNECTED_BROWSERS,
+  type ExtensionAuthenticationMode,
+  type StoredExtensionKey
+} from "./key-registry.js";
+import {
+  DISABLED_FILE_ATTACH_POLICY,
+  FileAttachError,
+  attachedFileFacts,
+  auditPathDigest,
+  loadFileAttachPolicy,
+  readAttachableFile,
+  type AttachableFile,
+  type FileAttachPolicy
+} from "./file-attach.js";
+import {
+  DISABLED_SESSION_APPROVAL_POLICY,
+  createSessionChallenge,
+  loadSessionApprovalPolicy,
+  sessionChallengeMatches,
+  type SessionApprovalPolicy
+} from "./session-approval.js";
 
-const IPC_ENVELOPE_OVERHEAD_BYTES = 16 * 1024;
-const MAX_REQUEST_ID_LENGTH = 128;
-const MAX_METHOD_LENGTH = 64;
+// The npm surface is `dist/src/daemon.js`, which re-exports this file. Keep
+// these names exported from here so the published entrypoint does not change.
+export { canonicalJson, isAllowedExtensionOrigin } from "./crypto.js";
+export { parseIpcRequest } from "./wire.js";
+export { SafeAuditLogger, type SafeAuditEvent, type SafeAuditLoggerOptions } from "./audit.js";
+
 const MAX_UNAUTHENTICATED_CONNECTIONS = 8;
-const MAX_CONNECTED_BROWSERS = 16;
 const MAX_IPC_CONNECTIONS = 128;
-const MAX_KEY_REGISTRY_BYTES = 1024 * 1024;
 const HEARTBEAT_INTERVAL_MS = 20_000;
-const BASE64URL_256_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
-const MAX_REPLAY_NONCES = 4_096;
-const REPLAY_NONCE_TTL_MS = 10 * 60_000;
-const MAX_IPC_HELLO_BYTES = 4 * 1024;
 const SAFE_CLOSE_REASON = "policy violation";
-const REGISTRY_VERSION = 2 as const;
-const LEGACY_REGISTRY_VERSION = 1 as const;
+/** Base64 expansion of the largest attachable file, plus envelope headroom. */
+const ATTACH_FILE_COMMAND_CEILING_BYTES = 12 * 1024 * 1024;
+const IPC_ENVELOPE_OVERHEAD_BYTES = 16 * 1024;
+const MAX_IPC_HELLO_BYTES = 4 * 1024;
 const SETUP_SECRET_PATTERN = /^[a-f0-9]{64}$/u;
-const SETUP_MAX_TTL_MS = 5 * 60_000;
-const SETUP_ENCRYPTION_KEY_INFO = "BrowseWeave setup encryption key v1";
-const SETUP_IV_BYTES = 12;
-const SETUP_AUTH_TAG_BYTES = 16;
-const DEFAULT_MAX_AUDIT_QUEUE_ENTRIES = 512;
-const DEFAULT_MAX_AUDIT_FILE_BYTES = 5 * 1024 * 1024;
-const MIN_AUDIT_FILE_BYTES = 512;
-const AUDIT_LABEL_PATTERN = /^[a-z][a-z0-9_]{0,119}$/u;
-const UNAUTHENTICATED_AUDIT_WINDOW_MS = 1_000;
-const UNAUTHENTICATED_AUDIT_BURST_PER_OUTCOME = 2;
-const MAX_UNAUTHENTICATED_AUDIT_OUTCOMES = 16;
-const OTHER_UNAUTHENTICATED_OUTCOME = "unauthenticated_rejection_other";
 
 interface PendingCommand {
   commandId: string;
@@ -149,6 +162,12 @@ interface PendingApproval {
   expiresAtIso: string;
   state: ApprovalState;
   timer: ReturnType<typeof setTimeout>;
+  /** Present only when the owner's policy allows confirming this risk in-session. */
+  sessionChallenge?: string;
+  /** A wrong phrase destroys the approval, so only one attempt is ever possible. */
+  sessionAttempted?: boolean;
+  /** Which authority approved it; drives what the extension requires to execute. */
+  approvalSource?: ApprovalSource;
 }
 
 type IpcPhase = "await_client_hello" | "await_request" | "accepted";
@@ -174,15 +193,6 @@ interface ExtensionHandshakeState {
   legacyEnrollmentId?: string;
   setupId?: string;
   setupPhase?: SetupAuthenticationPhase;
-}
-
-type ExtensionAuthenticationMode = "legacy" | "derived-v1";
-
-interface StoredExtensionKey {
-  browserId: string;
-  publicKey: P256PublicJwk;
-  enrolledAt: string;
-  authMode: ExtensionAuthenticationMode;
 }
 
 interface SetupPairingSession {
@@ -224,15 +234,6 @@ interface BrowserSession {
   setupProvisioning?: true;
 }
 
-export interface SafeAuditEvent {
-  event: "command" | "approval" | "connection";
-  action?: BrowserAction;
-  outcome: string;
-  code?: string;
-  duration_ms?: number;
-  count?: number;
-}
-
 export interface DaemonStatusSnapshot {
   websocketListening: boolean;
   ipcListening: boolean;
@@ -250,821 +251,8 @@ export interface DaemonAddresses {
   ipcPort: number;
 }
 
-function own(record: JsonObject, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
-}
 
-function hasExactFields(record: JsonObject, fields: ReadonlySet<string>): boolean {
-  const keys = Object.keys(record);
-  return keys.length === fields.size && keys.every((key) => fields.has(key));
-}
 
-function jsonObjectWithout(record: JsonObject, excluded: ReadonlySet<string>): JsonObject {
-  const output = Object.create(null) as JsonObject;
-  for (const [key, value] of Object.entries(record)) {
-    if (!excluded.has(key)) output[key] = value;
-  }
-  return output;
-}
-
-export function canonicalJson(value: JsonValue): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (isJsonObject(value)) {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key] ?? null)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function sha256(value: string): string {
-  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
-}
-
-function randomBase64Url(bytes = 32): string {
-  return randomBytes(bytes).toString("base64url");
-}
-
-function framedField(name: string, value: string): string {
-  return `${name}:${Buffer.byteLength(value, "utf8")}:${value}\n`;
-}
-
-function installationAuthenticationSecretPayload(
-  installationId: string,
-  publicKey: P256PublicJwk
-): string {
-  return "BrowseWeave installation authentication secret v1\n" +
-    framedField("protocol_version", String(PROTOCOL_VERSION)) +
-    framedField("installation_id", installationId) +
-    framedField("public_key", canonicalPublicJwk(publicKey));
-}
-
-function deriveInstallationAuthenticationSecret(
-  masterSecret: string,
-  installationId: string,
-  publicKey: P256PublicJwk
-): string {
-  return createHmac("sha256", Buffer.from(masterSecret, "utf8"))
-    .update(installationAuthenticationSecretPayload(installationId, publicKey), "utf8")
-    .digest("base64url");
-}
-
-function isExactP256PublicJwk(value: unknown): value is P256PublicJwk {
-  if (!isP256PublicJwk(value)) return false;
-  return hasExactFields(value, new Set(["kty", "crv", "x", "y", "ext", "key_ops"]));
-}
-
-function canonicalFutureExpiry(
-  value: unknown,
-  now = Date.now()
-): { expiresAt: number; expiresAtIso: string } | undefined {
-  if (typeof value !== "string") return undefined;
-  const expiresAt = Date.parse(value);
-  if (
-    !Number.isFinite(expiresAt) ||
-    new Date(expiresAt).toISOString() !== value ||
-    expiresAt <= now ||
-    expiresAt > now + SETUP_MAX_TTL_MS
-  ) return undefined;
-  return { expiresAt, expiresAtIso: value };
-}
-
-function encryptSetupPairingToken(input: {
-  setupSecret: string;
-  setupId: string;
-  clientNonce: string;
-  serverNonce: string;
-  daemonInstanceId: string;
-  origin: string;
-  identity: BrowserIdentity;
-  publicKey: P256PublicJwk;
-  expiresAt: string;
-  pairingToken: string;
-}): { iv: string; encryptedPairingToken: string } {
-  const key = Buffer.from(hkdfSync(
-    "sha256",
-    Buffer.from(input.setupSecret, "utf8"),
-    Buffer.from(setupPairingKeySalt({
-      setupId: input.setupId,
-      clientNonce: input.clientNonce,
-      serverNonce: input.serverNonce
-    }), "utf8"),
-    Buffer.from(SETUP_ENCRYPTION_KEY_INFO, "utf8"),
-    32
-  ));
-  const iv = randomBytes(SETUP_IV_BYTES);
-  const aad = setupPairingAadPayload({
-    setupId: input.setupId,
-    clientNonce: input.clientNonce,
-    serverNonce: input.serverNonce,
-    daemonInstanceId: input.daemonInstanceId,
-    origin: input.origin,
-    identity: input.identity,
-    publicKey: input.publicKey,
-    expiresAt: input.expiresAt
-  });
-  const plaintext = Buffer.from(input.pairingToken, "utf8");
-  try {
-    const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: SETUP_AUTH_TAG_BYTES });
-    cipher.setAAD(Buffer.from(aad, "utf8"), { plaintextLength: plaintext.byteLength });
-    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]);
-    return {
-      iv: iv.toString("base64url"),
-      encryptedPairingToken: ciphertext.toString("base64url")
-    };
-  } finally {
-    key.fill(0);
-    plaintext.fill(0);
-  }
-}
-
-function browserIdForInstallation(installationId: string): string {
-  return `browser-${createHash("sha256").update(installationId, "utf8").digest("hex").slice(0, 24)}`;
-}
-
-export function isAllowedExtensionOrigin(
-  origin: string | undefined,
-  allowedOrigins: readonly string[] = []
-): origin is string {
-  if (origin === undefined) return false;
-  const firefox = /^moz-extension:\/\/[A-Za-z0-9-]{8,128}$/u.test(origin);
-  const chromium = /^chrome-extension:\/\/[a-p]{32}$/u.test(origin);
-  if (!firefox && !chromium) return false;
-  return allowedOrigins.length === 0 || allowedOrigins.includes(origin);
-}
-
-function originMatchesBrowserFamily(origin: string, browserFamily: BrowserFamily): boolean {
-  return browserFamily === "firefox"
-    ? origin.startsWith("moz-extension://")
-    : origin.startsWith("chrome-extension://");
-}
-
-function isCanonicalNonce(value: unknown): value is string {
-  if (typeof value !== "string" || !BASE64URL_256_PATTERN.test(value)) return false;
-  const decoded = Buffer.from(value, "base64url");
-  return decoded.byteLength === 32 && decoded.toString("base64url") === value;
-}
-
-function hmacProof(secret: string, payload: string): string {
-  return createHmac("sha256", Buffer.from(secret, "utf8"))
-    .update(payload, "utf8")
-    .digest("base64url");
-}
-
-function proofMatches(candidate: unknown, expected: string): candidate is string {
-  if (!isCanonicalNonce(candidate) || !isCanonicalNonce(expected)) return false;
-  const candidateBytes = Buffer.from(candidate, "base64url");
-  const expectedBytes = Buffer.from(expected, "base64url");
-  return timingSafeEqual(candidateBytes, expectedBytes);
-}
-
-class ReplayNonceCache {
-  readonly #entries = new Map<string, number>();
-
-  claim(role: "extension" | "ipc" | "setup", nonce: string, now = Date.now()): boolean {
-    this.#prune(now);
-    const key = `${role}:${nonce}`;
-    if (this.#entries.has(key)) return false;
-    while (this.#entries.size >= MAX_REPLAY_NONCES) {
-      const oldest = this.#entries.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      this.#entries.delete(oldest);
-    }
-    this.#entries.set(key, now + REPLAY_NONCE_TTL_MS);
-    return true;
-  }
-
-  clear(): void {
-    this.#entries.clear();
-  }
-
-  #prune(now: number): void {
-    for (const [key, expiresAt] of this.#entries) {
-      if (expiresAt > now) continue;
-      this.#entries.delete(key);
-    }
-  }
-}
-
-/** Parse and bound a request envelope. Its HMAC is verified by the connection state machine. */
-export function parseIpcRequest(line: string, maxPayloadBytes: number): IpcRequest {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line) as unknown;
-  } catch {
-    throw new Error("The IPC request is not valid JSON.");
-  }
-  if (!isJsonObject(parsed)) throw new Error("The IPC request must be a JSON object.");
-
-  const allowedFields = new Set([
-    "type",
-    "protocol_version",
-    "endpoint_role",
-    "id",
-    "method",
-    "params",
-    "client_nonce",
-    "server_nonce",
-    "daemon_instance_id",
-    "client_proof"
-  ]);
-  if (Object.keys(parsed).some((field) => !allowedFields.has(field))) {
-    throw new Error("The IPC request contains an unsupported field.");
-  }
-  if (
-    parsed.type !== "ipc_request" ||
-    parsed.protocol_version !== PROTOCOL_VERSION ||
-    parsed.endpoint_role !== "ipc"
-  ) {
-    throw new Error("The IPC request protocol envelope is invalid.");
-  }
-
-  const { id, method, params } = parsed;
-  if (typeof id !== "string" || id.length < 1 || id.length > MAX_REQUEST_ID_LENGTH) {
-    throw new Error("The IPC request ID must contain 1-128 characters.");
-  }
-  if (
-    typeof method !== "string" ||
-    method.length < 1 ||
-    method.length > MAX_METHOD_LENGTH ||
-    !/^[a-z][a-z0-9_]*$/u.test(method)
-  ) {
-    throw new Error("The IPC method name is invalid.");
-  }
-  if (!isJsonObject(params) || !isJsonValue(params)) {
-    throw new Error("The IPC params field must contain finite JSON values.");
-  }
-  if (Buffer.byteLength(JSON.stringify(params), "utf8") > maxPayloadBytes) {
-    throw new Error(`The IPC params exceed the safe size limit (${maxPayloadBytes} bytes).`);
-  }
-
-  if (
-    !isCanonicalNonce(parsed.client_nonce) ||
-    !isCanonicalNonce(parsed.server_nonce) ||
-    typeof parsed.daemon_instance_id !== "string" ||
-    !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(
-      parsed.daemon_instance_id
-    ) ||
-    !isCanonicalNonce(parsed.client_proof)
-  ) {
-    throw new Error("The IPC authentication proof is invalid.");
-  }
-  return {
-    type: "ipc_request",
-    protocol_version: PROTOCOL_VERSION,
-    endpoint_role: "ipc",
-    id,
-    method,
-    params,
-    client_nonce: parsed.client_nonce,
-    server_nonce: parsed.server_nonce,
-    daemon_instance_id: parsed.daemon_instance_id,
-    client_proof: parsed.client_proof
-  };
-}
-
-function rawDataToBuffer(data: RawData): Buffer {
-  if (Buffer.isBuffer(data)) return data;
-  if (data instanceof ArrayBuffer) return Buffer.from(data);
-  if (Array.isArray(data)) return Buffer.concat(data);
-  throw new Error("Unsupported WebSocket data type.");
-}
-
-function parseExtensionResult(value: JsonObject): ExtensionResult | undefined {
-  if (value.type !== "result" || typeof value.id !== "string") return undefined;
-  if (value.ok === true) {
-    const result = own(value, "result") ? value.result : null;
-    return isJsonValue(result) ? { type: "result", id: value.id, ok: true, result } : undefined;
-  }
-  if (value.ok !== false || !isJsonObject(value.error)) return undefined;
-  const error = value.error;
-  if (typeof error.code !== "string" || typeof error.message !== "string") return undefined;
-  if (own(error, "category") && typeof error.category !== "string") return undefined;
-  if (own(error, "approval_fingerprint") && typeof error.approval_fingerprint !== "string") {
-    return undefined;
-  }
-  if (
-    own(error, "target_tab_id") &&
-    (typeof error.target_tab_id !== "number" || !Number.isSafeInteger(error.target_tab_id) || error.target_tab_id <= 0)
-  ) return undefined;
-  if (
-    own(error, "target_frame_id") &&
-    (typeof error.target_frame_id !== "number" || !Number.isSafeInteger(error.target_frame_id) || error.target_frame_id < 0)
-  ) return undefined;
-  if (own(error, "details") && !isJsonObject(error.details)) return undefined;
-
-  const normalized: ExtensionError = { code: error.code, message: error.message };
-  if (typeof error.category === "string") normalized.category = error.category;
-  if (typeof error.approval_fingerprint === "string") {
-    normalized.approval_fingerprint = error.approval_fingerprint;
-  }
-  if (typeof error.target_tab_id === "number") normalized.target_tab_id = error.target_tab_id;
-  if (typeof error.target_frame_id === "number") normalized.target_frame_id = error.target_frame_id;
-  if (isJsonObject(error.details)) normalized.details = error.details;
-  return { type: "result", id: value.id, ok: false, error: normalized };
-}
-
-function parseBrowserIdentity(value: unknown): BrowserIdentity | undefined {
-  if (
-    !isJsonObject(value) ||
-    !hasExactFields(value, new Set([
-      "installation_id",
-      "browser_family",
-      "browser_name",
-      "browser_version",
-      "extension_version"
-    ])) ||
-    !isInstallationId(value.installation_id)
-  ) return undefined;
-  if (value.browser_family !== "firefox" && value.browser_family !== "chromium") return undefined;
-  for (const field of ["browser_name", "browser_version", "extension_version"] as const) {
-    const candidate = value[field];
-    if (
-      typeof candidate !== "string" ||
-      candidate.length < 1 ||
-      candidate.length > 120 ||
-      /[\p{Cc}\p{Cf}]/u.test(candidate)
-    ) return undefined;
-  }
-  return {
-    installation_id: value.installation_id,
-    browser_family: value.browser_family,
-    browser_name: value.browser_name as string,
-    browser_version: value.browser_version as string,
-    extension_version: value.extension_version as string
-  };
-}
-
-function decodeP1363Signature(value: unknown): Buffer | undefined {
-  if (typeof value !== "string" || value.length !== 86 || !BASE64URL_PATTERN.test(value)) {
-    return undefined;
-  }
-  const decoded = Buffer.from(value, "base64url");
-  if (decoded.byteLength !== 64 || decoded.toString("base64url") !== value) return undefined;
-  return decoded;
-}
-
-function publicKeyObject(jwk: P256PublicJwk): KeyObject {
-  return createPublicKey({ key: jwk as JsonWebKey, format: "jwk" });
-}
-
-function verifyP256(key: KeyObject, payload: string, signature: unknown): boolean {
-  const decoded = decodeP1363Signature(signature);
-  if (decoded === undefined) return false;
-  try {
-    return verifySignature(
-      "sha256",
-      Buffer.from(payload, "utf8"),
-      { key, dsaEncoding: "ieee-p1363" },
-      decoded
-    );
-  } catch {
-    return false;
-  }
-}
-
-export interface SafeAuditLoggerOptions {
-  maxQueueEntries?: number;
-  maxFileBytes?: number;
-}
-
-function safeAuditLabel(value: string): string {
-  return AUDIT_LABEL_PATTERN.test(value) ? value : "invalid_audit_label";
-}
-
-function safeAuditLine(event: SafeAuditEvent): string {
-  const safeRecord: Record<string, string | number> = {
-    timestamp: new Date().toISOString(),
-    event: event.event,
-    outcome: safeAuditLabel(event.outcome)
-  };
-  if (event.action !== undefined) safeRecord.action = event.action;
-  if (event.code !== undefined) safeRecord.code = safeAuditLabel(event.code);
-  if (event.duration_ms !== undefined && Number.isFinite(event.duration_ms)) {
-    safeRecord.duration_ms = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.round(event.duration_ms)));
-  }
-  if (event.count !== undefined && Number.isSafeInteger(event.count) && event.count > 0) {
-    safeRecord.count = event.count;
-  }
-  return `${JSON.stringify(safeRecord)}\n`;
-}
-
-export class SafeAuditLogger {
-  readonly #path: string;
-  readonly #rotatedPath: string;
-  readonly #maxQueueEntries: number;
-  readonly #maxFileBytes: number;
-  #handle: FileHandle | undefined;
-  #fileBytes = 0;
-  readonly #queuedLines: string[] = [];
-  #droppedEvents = 0;
-  #drainPromise: Promise<void> | undefined;
-  #accepting = false;
-  lastError: string | undefined;
-
-  constructor(path: string, options: SafeAuditLoggerOptions = {}) {
-    const maxQueueEntries = options.maxQueueEntries ?? DEFAULT_MAX_AUDIT_QUEUE_ENTRIES;
-    const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_AUDIT_FILE_BYTES;
-    if (!Number.isSafeInteger(maxQueueEntries) || maxQueueEntries < 1 || maxQueueEntries > 100_000) {
-      throw new Error("The audit queue limit must be between 1 and 100000 entries.");
-    }
-    if (!Number.isSafeInteger(maxFileBytes) || maxFileBytes < MIN_AUDIT_FILE_BYTES || maxFileBytes > 1024 ** 3) {
-      throw new Error(`The audit file limit must be between ${MIN_AUDIT_FILE_BYTES} bytes and 1 GiB.`);
-    }
-    this.#path = path;
-    this.#rotatedPath = `${path}.1`;
-    this.#maxQueueEntries = maxQueueEntries;
-    this.#maxFileBytes = maxFileBytes;
-  }
-
-  async start(): Promise<void> {
-    if (this.#handle !== undefined) return;
-    const opened = await this.#openCurrentFile();
-    this.#handle = opened.handle;
-    this.#fileBytes = opened.size;
-    this.#accepting = true;
-    if (this.#fileBytes >= this.#maxFileBytes) await this.#rotate();
-  }
-
-  async #openCurrentFile(): Promise<{ handle: FileHandle; size: number }> {
-    const handle = await open(
-      this.#path,
-      fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
-      0o600
-    );
-    try {
-      const info = await handle.stat();
-      if (
-        !info.isFile() ||
-        !Number.isSafeInteger(info.size) ||
-        info.size < 0 ||
-        (typeof process.getuid === "function" && info.uid !== process.getuid())
-      ) {
-        throw new Error(`The audit log is not a safe user-owned file: ${this.#path}`);
-      }
-      if (process.platform !== "win32") await handle.chmod(0o600);
-      return { handle, size: info.size };
-    } catch (error) {
-      await handle.close();
-      throw error;
-    }
-  }
-
-  record(event: SafeAuditEvent): void {
-    if (!this.#accepting || this.#handle === undefined) return;
-    if (this.#queuedLines.length >= this.#maxQueueEntries) {
-      this.#droppedEvents = Math.min(Number.MAX_SAFE_INTEGER, this.#droppedEvents + 1);
-      return;
-    }
-    this.#queuedLines.push(safeAuditLine(event));
-    this.#ensureDrain();
-  }
-
-  async close(): Promise<void> {
-    this.#accepting = false;
-    while (this.#drainPromise !== undefined || this.#queuedLines.length > 0 || this.#droppedEvents > 0) {
-      this.#ensureDrain();
-      await this.#drainPromise;
-    }
-    await this.#handle?.close();
-    this.#handle = undefined;
-    this.#fileBytes = 0;
-  }
-
-  #ensureDrain(): void {
-    if (
-      this.#drainPromise !== undefined ||
-      this.#handle === undefined ||
-      (this.#queuedLines.length === 0 && this.#droppedEvents === 0)
-    ) return;
-    const promise = this.#drain().finally(() => {
-      if (this.#drainPromise !== promise) return;
-      this.#drainPromise = undefined;
-      if (this.#queuedLines.length > 0 || this.#droppedEvents > 0) this.#ensureDrain();
-    });
-    this.#drainPromise = promise;
-  }
-
-  async #drain(): Promise<void> {
-    while (this.#queuedLines.length > 0) {
-      const line = this.#queuedLines.shift();
-      if (line !== undefined) await this.#appendSafely(line);
-    }
-    if (this.#droppedEvents > 0) {
-      const count = this.#droppedEvents;
-      this.#droppedEvents = 0;
-      await this.#appendSafely(safeAuditLine({
-        event: "connection",
-        outcome: "audit_events_dropped",
-        count
-      }));
-    }
-  }
-
-  async #appendSafely(line: string): Promise<void> {
-    try {
-      const lineBytes = Buffer.byteLength(line, "utf8");
-      if (lineBytes > this.#maxFileBytes) throw new Error("An audit record exceeds the audit file size limit.");
-      if (this.#fileBytes > 0 && this.#fileBytes + lineBytes > this.#maxFileBytes) await this.#rotate();
-      if (this.#handle === undefined) throw new Error("The audit log is not open.");
-      await this.#handle.appendFile(line, "utf8");
-      this.#fileBytes += lineBytes;
-    } catch (error) {
-      this.lastError = error instanceof Error ? error.message : "audit_write_failed";
-    }
-  }
-
-  async #rotate(): Promise<void> {
-    const handle = this.#handle;
-    if (handle === undefined) throw new Error("The audit log is not open for rotation.");
-    await handle.close();
-    this.#handle = undefined;
-    try {
-      try {
-        const previous = await lstat(this.#rotatedPath);
-        if (
-          !previous.isFile() ||
-          previous.isSymbolicLink() ||
-          (typeof process.getuid === "function" && previous.uid !== process.getuid())
-        ) {
-          throw new Error(`The rotated audit log is not a safe user-owned file: ${this.#rotatedPath}`);
-        }
-        await unlink(this.#rotatedPath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      await rename(this.#path, this.#rotatedPath);
-      const opened = await this.#openCurrentFile();
-      this.#handle = opened.handle;
-      this.#fileBytes = opened.size;
-    } catch (error) {
-      try {
-        const reopened = await this.#openCurrentFile();
-        this.#handle = reopened.handle;
-        this.#fileBytes = reopened.size;
-      } catch {
-        this.#fileBytes = 0;
-      }
-      throw error;
-    }
-  }
-}
-
-interface UnauthenticatedAuditWindow {
-  windowEndsAt: number;
-  emitted: number;
-  suppressed: number;
-}
-
-class UnauthenticatedAuditCoalescer {
-  readonly #audit: SafeAuditLogger;
-  readonly #windows = new Map<string, UnauthenticatedAuditWindow>();
-  #timer: ReturnType<typeof setTimeout> | undefined;
-  #active = false;
-
-  constructor(audit: SafeAuditLogger) {
-    this.#audit = audit;
-  }
-
-  start(): void {
-    this.#active = true;
-  }
-
-  record(outcome: string, now = Date.now()): void {
-    if (!this.#active) return;
-    let key = safeAuditLabel(outcome);
-    if (!this.#windows.has(key) && this.#windows.size >= MAX_UNAUTHENTICATED_AUDIT_OUTCOMES - 1) {
-      key = OTHER_UNAUTHENTICATED_OUTCOME;
-    }
-    let window = this.#windows.get(key);
-    if (window === undefined || now >= window.windowEndsAt) {
-      if (window !== undefined) this.#flushWindow(key, window);
-      window = {
-        windowEndsAt: now + UNAUTHENTICATED_AUDIT_WINDOW_MS,
-        emitted: 0,
-        suppressed: 0
-      };
-      this.#windows.set(key, window);
-    }
-    if (window.emitted < UNAUTHENTICATED_AUDIT_BURST_PER_OUTCOME) {
-      window.emitted += 1;
-      this.#audit.record({ event: "connection", outcome: key });
-      return;
-    }
-    window.suppressed = Math.min(Number.MAX_SAFE_INTEGER, window.suppressed + 1);
-    this.#scheduleFlush();
-  }
-
-  close(): void {
-    this.#active = false;
-    if (this.#timer !== undefined) clearTimeout(this.#timer);
-    this.#timer = undefined;
-    for (const [outcome, window] of this.#windows) this.#flushWindow(outcome, window);
-    this.#windows.clear();
-  }
-
-  #flushWindow(outcome: string, window: UnauthenticatedAuditWindow): void {
-    if (window.suppressed <= 0) return;
-    this.#audit.record({
-      event: "connection",
-      outcome: "unauthenticated_rejections_coalesced",
-      code: outcome,
-      count: window.suppressed
-    });
-    window.suppressed = 0;
-  }
-
-  #scheduleFlush(): void {
-    if (this.#timer !== undefined) return;
-    let earliest = Number.POSITIVE_INFINITY;
-    for (const window of this.#windows.values()) {
-      if (window.suppressed > 0) earliest = Math.min(earliest, window.windowEndsAt);
-    }
-    if (!Number.isFinite(earliest)) return;
-    this.#timer = setTimeout(() => {
-      this.#timer = undefined;
-      const now = Date.now();
-      for (const [outcome, window] of this.#windows) {
-        if (now < window.windowEndsAt) continue;
-        this.#flushWindow(outcome, window);
-        this.#windows.delete(outcome);
-      }
-      if ([...this.#windows.values()].some((window) => window.suppressed > 0)) this.#scheduleFlush();
-    }, Math.max(1, earliest - Date.now()));
-    this.#timer.unref();
-  }
-}
-
-class ExtensionKeyRegistry {
-  readonly #path: string;
-  readonly #entries = new Map<string, StoredExtensionKey>();
-  #mutationQueue: Promise<void> = Promise.resolve();
-
-  constructor(path: string) {
-    this.#path = path;
-  }
-
-  get(installationId: string): StoredExtensionKey | undefined {
-    return this.#entries.get(installationId);
-  }
-
-  get size(): number {
-    return this.#entries.size;
-  }
-
-  async load(): Promise<void> {
-    let info;
-    try {
-      info = await lstat(this.#path);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    if (!info.isFile() || info.isSymbolicLink()) {
-      throw new Error(`The extension public-key registry is not a safe regular file: ${this.#path}`);
-    }
-    if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
-      throw new Error(`The extension public-key registry is not owned by the current user: ${this.#path}`);
-    }
-    if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
-      throw new Error(`The extension public-key registry permissions are unsafe: ${this.#path}`);
-    }
-    if (info.size > MAX_KEY_REGISTRY_BYTES) {
-      throw new Error("The extension public-key registry exceeds the safe size limit.");
-    }
-
-    const parsed = JSON.parse(await readFile(this.#path, "utf8")) as unknown;
-    if (
-      !isJsonObject(parsed) ||
-      !hasExactFields(parsed, new Set(["version", "installations"])) ||
-      (parsed.version !== LEGACY_REGISTRY_VERSION && parsed.version !== REGISTRY_VERSION) ||
-      !isJsonObject(parsed.installations)
-    ) {
-      throw new Error("The extension public-key registry has an invalid format.");
-    }
-    const legacyRegistry = parsed.version === LEGACY_REGISTRY_VERSION;
-    const rows = Object.entries(parsed.installations);
-    if (rows.length > MAX_CONNECTED_BROWSERS * 4) {
-      throw new Error("The extension public-key registry contains too many installations.");
-    }
-    const loaded = new Map<string, StoredExtensionKey>();
-    for (const [installationId, rawEntry] of rows) {
-      if (!isInstallationId(installationId) || !isJsonObject(rawEntry)) {
-        throw new Error("The extension public-key registry contains an invalid installation.");
-      }
-      const expectedFields = legacyRegistry
-        ? new Set(["browser_id", "public_key", "enrolled_at"])
-        : new Set(["browser_id", "public_key", "enrolled_at", "auth_mode"]);
-      const enrolledAt = typeof rawEntry.enrolled_at === "string" ? Date.parse(rawEntry.enrolled_at) : Number.NaN;
-      if (
-        !hasExactFields(rawEntry, expectedFields) ||
-        rawEntry.browser_id !== browserIdForInstallation(installationId) ||
-        typeof rawEntry.enrolled_at !== "string" ||
-        !Number.isFinite(enrolledAt) ||
-        new Date(enrolledAt).toISOString() !== rawEntry.enrolled_at ||
-        !isExactP256PublicJwk(rawEntry.public_key) ||
-        (!legacyRegistry && rawEntry.auth_mode !== "legacy" && rawEntry.auth_mode !== "derived-v1")
-      ) {
-        throw new Error("The extension public-key registry contains an invalid key entry.");
-      }
-      loaded.set(installationId, {
-        browserId: rawEntry.browser_id,
-        publicKey: rawEntry.public_key,
-        enrolledAt: rawEntry.enrolled_at,
-        authMode: legacyRegistry ? "legacy" : rawEntry.auth_mode as ExtensionAuthenticationMode
-      });
-    }
-    this.#entries.clear();
-    for (const [installationId, entry] of loaded) this.#entries.set(installationId, entry);
-    if (legacyRegistry) await this.#save();
-  }
-
-  async pin(
-    installationId: string,
-    publicKey: P256PublicJwk,
-    authMode: ExtensionAuthenticationMode
-  ): Promise<StoredExtensionKey> {
-    return await this.#serializeMutation(async () => {
-      const existing = this.#entries.get(installationId);
-      if (existing !== undefined) {
-        if (canonicalPublicJwk(existing.publicKey) !== canonicalPublicJwk(publicKey)) {
-          throw new Error("The extension signing key does not match the pinned key.");
-        }
-        if (existing.authMode === authMode) return existing;
-        if (existing.authMode === "derived-v1" || authMode !== "derived-v1") {
-          throw new Error("The extension authentication mode cannot be downgraded.");
-        }
-        const upgraded: StoredExtensionKey = { ...existing, authMode: "derived-v1" };
-        this.#entries.set(installationId, upgraded);
-        try {
-          await this.#save();
-        } catch (error) {
-          this.#entries.set(installationId, existing);
-          throw error;
-        }
-        return upgraded;
-      }
-      if (this.#entries.size >= MAX_CONNECTED_BROWSERS * 4) {
-        throw new Error("The extension public-key registry is full.");
-      }
-      const entry: StoredExtensionKey = {
-        browserId: browserIdForInstallation(installationId),
-        publicKey,
-        enrolledAt: new Date().toISOString(),
-        authMode
-      };
-      this.#entries.set(installationId, entry);
-      try {
-        await this.#save();
-      } catch (error) {
-        if (this.#entries.get(installationId) === entry) this.#entries.delete(installationId);
-        throw error;
-      }
-      return entry;
-    });
-  }
-
-  async #serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#mutationQueue.then(operation);
-    this.#mutationQueue = result.then(() => undefined, () => undefined);
-    return await result;
-  }
-
-  async #save(): Promise<void> {
-    const installations: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
-    for (const installationId of [...this.#entries.keys()].sort()) {
-      const entry = this.#entries.get(installationId);
-      if (entry === undefined) continue;
-      installations[installationId] = {
-        browser_id: entry.browserId,
-        public_key: entry.publicKey,
-        enrolled_at: entry.enrolledAt,
-        auth_mode: entry.authMode
-      };
-    }
-    const contents = `${JSON.stringify({ version: REGISTRY_VERSION, installations })}\n`;
-    const temporaryPath = `${this.#path}.${process.pid}.${randomUUID()}.tmp`;
-    let handle: FileHandle | undefined;
-    try {
-      handle = await open(
-        temporaryPath,
-        fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
-        0o600
-      );
-      await handle.writeFile(contents, "utf8");
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await rename(temporaryPath, this.#path);
-      if (process.platform !== "win32") await chmod(this.#path, 0o600);
-    } catch (error) {
-      await handle?.close();
-      await unlink(temporaryPath).catch(() => undefined);
-      throw error;
-    }
-  }
-}
 
 function validateConfig(config: DaemonConfig): void {
   if (config.wsHost !== DEFAULT_WS_HOST) {
@@ -1181,6 +369,8 @@ export class BrowseWeaveDaemon {
   readonly #browserIdByInstallation = new Map<string, string>();
   readonly #pendingCommands = new Map<string, PendingCommand>();
   readonly #pendingApprovals = new Map<string, PendingApproval>();
+  #sessionPolicy: SessionApprovalPolicy = DISABLED_SESSION_APPROVAL_POLICY;
+  #fileAttachPolicy: FileAttachPolicy = DISABLED_FILE_ATTACH_POLICY;
   #setupPairingSession: SetupPairingSession | undefined;
   #legacyPairingSession: LegacyPairingSession | undefined;
   #wsServer: WebSocketServer | undefined;
@@ -1206,6 +396,10 @@ export class BrowseWeaveDaemon {
     await ensurePrivateDirectory(this.#config.configDir);
     await ensurePrivateDirectory(this.#config.stateDir);
     await this.#keyRegistry.load();
+    // Read once at startup so a policy change is a deliberate restart rather
+    // than something that can take effect mid-session.
+    this.#sessionPolicy = await loadSessionApprovalPolicy(this.#config.configDir);
+    this.#fileAttachPolicy = await loadFileAttachPolicy(this.#config.configDir);
     this.#startedAt = Date.now();
     try {
       await this.#audit.start();
@@ -2194,6 +1388,14 @@ export class BrowseWeaveDaemon {
       this.#handleLegacyPairingBegin(socket, request.id, request.params);
       return;
     }
+    if (request.method === "session_approval_begin") {
+      this.#handleSessionApprovalBegin(socket, request.id, request.params);
+      return;
+    }
+    if (request.method === "session_approval_submit") {
+      this.#handleSessionApprovalSubmit(socket, request.id, request.params);
+      return;
+    }
     if (!isBrowserAction(request.method)) {
       this.#writeFailure(socket, request.id, `Unsupported BrowseWeave method: ${request.method}`);
       return;
@@ -2215,6 +1417,10 @@ export class BrowseWeaveDaemon {
       this.#writeFailure(socket, request.id, session.message);
       return;
     }
+    if (request.method === "attach_file") {
+      void this.#handleAttachFile(socket, request.id, session, request.params);
+      return;
+    }
     const actionParams = jsonObjectWithout(request.params, new Set(["browser_id"]));
     const approvedGrant = this.#findApprovalForParams(
       session.browserId,
@@ -2231,7 +1437,8 @@ export class BrowseWeaveDaemon {
       false,
       undefined,
       approvedGrant !== undefined,
-      approvedGrant?.approvalId
+      approvedGrant?.approvalId,
+      approvedGrant?.approvalSource
     );
   }
 
@@ -2471,7 +1678,8 @@ export class BrowseWeaveDaemon {
     approvalFingerprint?: string,
     revalidateOnly = false,
     revalidatingApprovalId?: string,
-    approvedGrantId?: string
+    approvedGrantId?: string,
+    approvalSource?: ApprovalSource
   ): void {
     if (session.socket.readyState !== WebSocket.OPEN) {
       if (approvedGrantId !== undefined) {
@@ -2510,7 +1718,8 @@ export class BrowseWeaveDaemon {
         revalidate_only: false,
         approved: true,
         approval_id: approvedGrantId,
-        approval_fingerprint: approvalFingerprint
+        approval_fingerprint: approvalFingerprint,
+        approval_source: approvalSource ?? "extension_signed"
       };
     } else {
       command = {
@@ -2523,7 +1732,13 @@ export class BrowseWeaveDaemon {
       };
     }
     const serialized = JSON.stringify(command);
-    if (Buffer.byteLength(serialized, "utf8") > this.#config.maxCommandPayloadBytes) {
+    // An attachment carries base64 file bytes, which legitimately exceed the
+    // limit meant for ordinary commands. The file's own size cap is enforced by
+    // the path policy before it ever reaches here.
+    const payloadCeiling = action === "attach_file"
+      ? Math.max(this.#config.maxCommandPayloadBytes, ATTACH_FILE_COMMAND_CEILING_BYTES)
+      : this.#config.maxCommandPayloadBytes;
+    if (Buffer.byteLength(serialized, "utf8") > payloadCeiling) {
       if (approvedGrantId !== undefined) {
         this.#cancelApprovedDelivery(session, approvedGrantId, action, "approved_delivery_too_large");
       }
@@ -2723,7 +1938,8 @@ export class BrowseWeaveDaemon {
             fingerprint,
             false,
             undefined,
-            consumedGrant.approvalId
+            consumedGrant.approvalId,
+            consumedGrant.approvalSource
           );
           return;
         }
@@ -2857,6 +2073,9 @@ export class BrowseWeaveDaemon {
       state: "pending",
       timer: setTimeout(() => this.#expireApproval(approvalId), this.#config.approvalTtlMs)
     };
+    if (this.#sessionPolicy.enabled && this.#sessionPolicy.risks.has(approval.risk)) {
+      approval.sessionChallenge = createSessionChallenge();
+    }
     approval.timer.unref();
     this.#pendingApprovals.set(approvalId, approval);
 
@@ -2872,7 +2091,8 @@ export class BrowseWeaveDaemon {
       description: approval.description,
       params_sha256: approval.paramsSha256,
       approval_fingerprint: approval.approvalFingerprint,
-      expires_at: approval.expiresAtIso
+      expires_at: approval.expiresAtIso,
+      ...(attachedFileFacts(approval.params) ?? {})
     };
     try {
       session.socket.send(JSON.stringify(request));
@@ -2897,9 +2117,161 @@ export class BrowseWeaveDaemon {
       description: approval.description,
       action: approval.action,
       expires_at: approval.expiresAtIso,
-      message: "Approve or reject this operation in the target browser extension, then retry the same action."
+      message: approval.sessionChallenge === undefined
+        ? "Approve or reject this operation in the target browser extension, then retry the same action."
+        : "Confirm this operation with the user in this session, or approve it in the target browser extension, then retry the same action.",
+      session_approval_available: approval.sessionChallenge !== undefined
     };
     this.#writeSuccess(client, requestId, result);
+  }
+
+  /**
+   * Reads the requested local file under the owner's path policy and forwards
+   * it as ordinary command parameters.
+   *
+   * The file bytes are deliberately part of the approval's parameter identity.
+   * A retry re-reads the file, so a byte-identical file matches the existing
+   * grant while any change produces different parameters and therefore requires
+   * a fresh approval. That closes the window between confirming a file and
+   * uploading it without a separate digest check.
+   */
+  async #handleAttachFile(
+    socket: Socket,
+    requestId: string,
+    session: BrowserSession,
+    params: JsonObject
+  ): Promise<void> {
+    let file: AttachableFile;
+    try {
+      file = await readAttachableFile(params.path, this.#fileAttachPolicy, [
+        this.#config.configDir,
+        this.#config.stateDir,
+        this.#config.runtimeDir
+      ]);
+    } catch (error) {
+      const code = error instanceof FileAttachError ? error.code : "file_attach_failed";
+      this.#audit.record({ event: "command", action: "attach_file", outcome: "failed", code });
+      this.#writeFailure(
+        socket,
+        requestId,
+        error instanceof FileAttachError ? error.message : "The file could not be read."
+      );
+      return;
+    }
+
+    this.#audit.record({
+      event: "command",
+      action: "attach_file",
+      outcome: "file_accepted",
+      file_sha256: file.sha256,
+      file_size: file.size,
+      file_mime_type: file.mimeType,
+      file_path_sha256: auditPathDigest(file.resolvedPath)
+    });
+
+    const actionParams: JsonObject = {
+      ...jsonObjectWithout(params, new Set(["browser_id", "path"])),
+      file: {
+        name: file.name,
+        mime_type: file.mimeType,
+        sha256: file.sha256,
+        size: file.size,
+        base64: file.base64
+      }
+    };
+    const approvedGrant = this.#findApprovalForParams(session.browserId, "attach_file", actionParams, "approved");
+    this.#routeCommand(
+      socket,
+      requestId,
+      session,
+      "attach_file",
+      actionParams,
+      false,
+      undefined,
+      approvedGrant !== undefined,
+      approvedGrant?.approvalId,
+      approvedGrant?.approvalSource
+    );
+  }
+
+  /**
+   * Issues the confirmation phrase to the MCP server over authenticated IPC.
+   * The phrase is never written to a tool result or the audit log, so a page
+   * cannot learn it and replay a confirmation the human never gave.
+   */
+  #handleSessionApprovalBegin(socket: Socket, requestId: string, params: JsonObject): void {
+    if (!hasExactFields(params, new Set(["approval_id"])) || typeof params.approval_id !== "string") {
+      this.#writeFailure(socket, requestId, "The session-approval request is invalid.");
+      return;
+    }
+    const approval = this.#pendingApprovals.get(params.approval_id);
+    if (approval === undefined || approval.expiresAt <= Date.now()) {
+      this.#writeFailure(socket, requestId, "That approval is unknown, already resolved, or expired.");
+      return;
+    }
+    if (approval.state !== "pending" || approval.sessionChallenge === undefined) {
+      this.#writeFailure(socket, requestId, "This action cannot be confirmed in the session. Approve it in the browser extension.");
+      return;
+    }
+    this.#writeSuccess(socket, requestId, {
+      approval_id: approval.approvalId,
+      action: approval.action,
+      risk: approval.risk,
+      description: approval.description,
+      browser_id: approval.browserId,
+      target_tab_id: approval.targetTabId,
+      target_frame_id: approval.targetFrameId,
+      expires_at: approval.expiresAtIso,
+      confirmation_phrase: approval.sessionChallenge,
+      ...(attachedFileFacts(approval.params) ?? {})
+    });
+  }
+
+  /**
+   * Accepts one human decision relayed from the MCP client. A wrong phrase
+   * destroys the approval instead of allowing another attempt, so the phrase
+   * cannot be ground down within its lifetime.
+   */
+  #handleSessionApprovalSubmit(socket: Socket, requestId: string, params: JsonObject): void {
+    const fields = new Set(["approval_id", "decision", "confirmation_phrase"]);
+    if (
+      !hasExactFields(params, fields) ||
+      typeof params.approval_id !== "string" ||
+      (params.decision !== "approve" && params.decision !== "reject")
+    ) {
+      this.#writeFailure(socket, requestId, "The session-approval decision is invalid.");
+      return;
+    }
+    const approval = this.#pendingApprovals.get(params.approval_id);
+    if (approval === undefined || approval.expiresAt <= Date.now()) {
+      this.#writeFailure(socket, requestId, "That approval is unknown, already resolved, or expired.");
+      return;
+    }
+    if (approval.state !== "pending" || approval.sessionChallenge === undefined || approval.sessionAttempted === true) {
+      this.#writeFailure(socket, requestId, "This approval can no longer be confirmed in the session.");
+      return;
+    }
+    approval.sessionAttempted = true;
+    if (!sessionChallengeMatches(approval.sessionChallenge, params.confirmation_phrase)) {
+      this.#takeApproval(approval.approvalId);
+      this.#audit.record({ event: "approval", action: approval.action, outcome: "session_phrase_mismatch" });
+      this.#writeFailure(
+        socket,
+        requestId,
+        "The confirmation phrase did not match. The approval was discarded; request the action again to get a new one."
+      );
+      return;
+    }
+    if (params.decision === "reject") {
+      this.#takeApproval(approval.approvalId);
+      this.#audit.record({ event: "approval", action: approval.action, outcome: "session_rejected" });
+      this.#writeSuccess(socket, requestId, { approval_id: approval.approvalId, decision: "reject" });
+      return;
+    }
+    approval.state = "approved";
+    approval.approvalSource = "session";
+    this.#audit.record({ event: "approval", action: approval.action, outcome: "session_approved" });
+    this.#writeSuccess(socket, requestId, { approval_id: approval.approvalId, decision: "approve" });
   }
 
   async #handleApprovalDecision(session: BrowserSession, message: JsonObject): Promise<void> {

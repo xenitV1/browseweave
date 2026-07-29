@@ -429,6 +429,11 @@ function fieldValue(element: Element, descriptor: FieldDescriptor): string | und
     const selected = [...element.selectedOptions].map((option) => option.label || option.text).join(", ");
     return maskSensitiveValue(selected, descriptor);
   }
+  if (element instanceof HTMLInputElement && element.type === "file") {
+    // The browser reports a fake path, but the basename is still local
+    // filesystem detail that does not belong in model context.
+    return element.files?.length ? `[ATTACHED:${element.files.length}]` : "";
+  }
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
     return maskSensitiveValue(element.value, descriptor);
   }

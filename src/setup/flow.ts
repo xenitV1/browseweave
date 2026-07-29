@@ -9,6 +9,20 @@ export const SETUP_SECRET_PATTERN = /^[a-f0-9]{64}$/u;
 
 export type SetupBrowserTarget = "chrome" | "zen";
 
+/** A removed legacy copy must be replaced before an in-memory connection is reused. */
+export function shouldReuseConnectedBrowser(input: { newProfile: boolean; legacyCopyRemoved: boolean }): boolean {
+  return !input.newProfile && !input.legacyCopyRemoved;
+}
+
+/** Client registration is deliberately completed before any browser-owned consent flow starts. */
+export async function prepareSetupBeforeBrowserConsent(input: {
+  configureClients(): Promise<void>;
+  installService(): Promise<void>;
+}): Promise<void> {
+  await input.configureClients();
+  await input.installService();
+}
+
 export interface SetupPageServer {
   readonly setupId: string;
   readonly setupSecret: string;
@@ -178,6 +192,26 @@ async function verifyManagedExtension(directory: string): Promise<ManagedExtensi
     throw new Error("The managed extension files were modified and were not overwritten.");
   }
   return marker;
+}
+
+/**
+ * Removes a managed extension copy this installation previously created, so an
+ * upgrade that relocates the folder cannot leave two enabled copies behind.
+ * Anything that is not a verified BrowseWeave copy is left untouched.
+ */
+export async function removeManagedExtensionCopy(
+  parent: string,
+  target: ManagedExtensionMarker["target"]
+): Promise<boolean> {
+  if (!path.isAbsolute(parent) || /[\0\r\n]/u.test(parent)) return false;
+  const directory = path.join(parent, target);
+  try {
+    await verifyManagedExtension(directory);
+  } catch {
+    return false;
+  }
+  await rm(directory, { recursive: true, force: true });
+  return true;
 }
 
 export async function prepareManagedExtension(input: {

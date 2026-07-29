@@ -48,6 +48,36 @@ describe("daemon configuration and pure protocol helpers", () => {
     ]);
   });
 
+  it("records bounded attachment identity fields without accepting a raw path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "browseweave-audit-file-"));
+    temporaryDirectories.push(root);
+    const auditPath = path.join(root, "audit.jsonl");
+    const audit = new SafeAuditLogger(auditPath);
+    await audit.start();
+    audit.record({
+      event: "command",
+      action: "attach_file",
+      outcome: "file_accepted",
+      file_sha256: "a".repeat(64),
+      file_size: 123,
+      file_mime_type: "image/png",
+      file_path_sha256: "b".repeat(64),
+      code: "/home/user/private.png"
+    });
+    await audit.close();
+
+    const record = JSON.parse((await readFile(auditPath, "utf8")).trim()) as Record<string, unknown>;
+    expect(record).toMatchObject({
+      action: "attach_file",
+      file_sha256: "a".repeat(64),
+      file_size: 123,
+      file_mime_type: "image/png",
+      file_path_sha256: "b".repeat(64),
+      code: "invalid_audit_label"
+    });
+    expect(JSON.stringify(record)).not.toContain("/home/user/private.png");
+  });
+
   it("caps the active audit file and retains only one bounded rotation", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "browseweave-audit-rotation-"));
     temporaryDirectories.push(root);

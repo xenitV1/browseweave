@@ -46,13 +46,48 @@ When the extension's conservative risk checks detect one of the following classe
 - account access, privacy, or security-setting changes;
 - risky form submission and every semantic-free coordinate click.
 
-There is no MCP tool that grants approval. The target extension shows a trusted extension page and signs an approve/reject decision with its non-exportable private key. It also retains its own bounded one-use grant; an authenticated daemon cannot turn `approved: true` into permission without the matching extension-owned grant.
+There is no MCP tool that grants approval. By default the target extension shows a trusted extension page and signs an approve/reject decision with its non-exportable private key. It also retains its own bounded one-use grant; for that default path an authenticated daemon cannot turn `approved: true` into permission without the matching extension-owned grant.
+
+### Session-confirmed approval, and what it changes
+
+The browser owner may allow a narrower second path in which a human confirms in the MCP client session instead of the extension popup. It is **off by default** and requires two independent opt-ins in two different trust domains: an owner-only `policy.json` in the BrowseWeave configuration directory, and a toggle in extension-owned Settings. Either one being off disables it. The daemon reads the policy once at startup, and no MCP tool can write either switch.
+
+State the cost plainly: for the risk classes that opt in, the sentence above about the extension-owned grant no longer holds. The trust root moves from the extension's private key to a new assumption — **that the MCP client relays human input honestly and does not answer elicitation requests on the user's behalf.**
+
+The path is limited by four independent checks:
+
+- **Tier.** Only `form_submit`, `message`, and `external_navigation` are ever eligible. Payment, deletion, passwords, one-time codes, account security, coordinate clicks, and both credential channels always require the extension-signed decision. The owner's policy may narrow this list but never widen it.
+- **Live risk, not a claim.** The content script re-derives the risk class at execution time and refuses a session-sourced command whose live class is not session-approvable, so a compromised daemon cannot mislabel a payment as a form submission. The approval fingerprint already covers the assessed risk, so the same lie also breaks fingerprint matching.
+- **Confirmation phrase.** The daemon generates a four-word phrase bound to one approval and delivers it only over authenticated loopback IPC into the elicitation message. It never appears in a tool result, the audit log, extension UI, a page DOM or URL, or daemon output, so a page cannot learn it. Comparison is constant-time after whitespace and case normalisation. **One attempt only:** a wrong phrase discards the approval rather than allowing another guess.
+- **Extension-side replay ledger.** A session approval ID executes at most once, and the ledger is cleared when the owner turns the toggle off.
+
+The retry still re-enters the normal path, so the live target is revalidated before anything runs.
+
+What the phrase does **not** defend against, stated explicitly: an MCP client that answers elicitation requests with the model instead of the human would see the phrase in the message and could echo it. Nothing in BrowseWeave detects that; it is exactly the trust assumption named above. Users who are not willing to make that assumption should leave the feature off, which is the default.
 
 The signed decision is bound to a daemon instance, approval ID, random nonce, browser installation, action, canonical parameter hash, live document/target fingerprint, and expiry. A retry first re-evaluates the live target without executing it. Only an exact fingerprint match consumes the grant and sends one approved command. A grant is single-use even if command delivery later fails.
 
 For clicks and submissions, the displayed destination is the browser-verified **current pre-action destination**. BrowseWeave rechecks it after focus and synthetic pre-click events and immediately before the native action. Page JavaScript running during the native event/default-action boundary, server behavior, or a later redirect can still change the eventual destination; the approval is not a guarantee of the final network destination.
 
 Risk detection is a defense layer, not a complete understanding of every site. Custom scripts, unlabeled controls, unfamiliar languages, deceptive labels, and site changes can evade a heuristic. The user and agent must still review the real target and use the least-powerful action that completes the task.
+
+## Attaching local files
+
+File attachment is the only capability that reads something outside a web page, so it is a genuinely new class of reach for BrowseWeave: without controls it would be a local-file exfiltration primitive, where an injected instruction could upload a private file to a hostile origin. It is **off by default**.
+
+Attachment is never session-approvable. It requires the extension-owned, signed approval UI, and the path policy independently limits which local files can even reach that prompt:
+
+- **Default deny.** With no `policy.json`, nothing is attachable. Enabling it requires listing absolute directories in an owner-only file that no MCP tool can write.
+- **Refused even inside an allowed directory:** any hidden path segment, which covers `.ssh`, `.gnupg`, `.aws`, `.env`, and `.npmrc`; multiple-hardlink aliases; known credential filenames and key formats; recognizable private-key content; unsupported file types; and BrowseWeave's own configuration, state, and runtime directories. A renamed or archived secret cannot be identified perfectly, which is why exact-file approval is still mandatory.
+- **Links fail closed.** Symlinks are resolved and checked against both path lists; files with more than one hardlink are refused so an innocent allowed alias cannot hide a denied or outside inode.
+- **Owner and handle checks.** Only regular files owned by the current user are read, opened with `O_NOFOLLOW`, and the device and inode are re-verified through the open handle so the path cannot be swapped between the check and the read.
+- **Size and type caps** from the policy, bounded by the transport ceiling.
+
+Approval is unconditional — attachment is never left to the risk heuristics, in the same way a semantic-free coordinate click is not. The extension popup shows the exact basename, byte size, MIME type, full SHA-256, and browser-verified site. Its signed one-use decision covers the canonical parameter hash, which includes the file bytes; a changed file cannot reuse the approval and produces a fresh prompt.
+
+The absolute path never reaches the browser; only the basename and bytes do. The audit log records the digest, size, type, and a hash of the path, never the path or the contents. Snapshots report an attached file as `[ATTACHED:n]` rather than its name.
+
+Clicking a file input remains refused. The operating-system picker cannot be driven by any extension, and opening it would block the tab with a modal BrowseWeave cannot dismiss.
 
 ## Credential channels
 

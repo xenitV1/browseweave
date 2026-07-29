@@ -344,7 +344,7 @@ describe("bootstrap publish cleanup", () => {
     expect(clean).not.toHaveProperty("NODE_PATH");
     expect(clean).not.toHaveProperty("npm_execpath");
     expect(clean.PATH ?? clean.Path).toContain(path.dirname(trusted.nodeExecutable));
-  }, 20_000);
+  }, process.platform === "win32" ? 45_000 : 20_000);
 
   it("runs every cleanup, preserves the publish error, and warns after an authenticated cleanup failure", async () => {
     const warning = vi.fn();

@@ -134,7 +134,97 @@ function imageDimensions(data: string, mimeType: string): { image_width: number;
   return undefined;
 }
 
+const SESSION_APPROVAL_DECLINED =
+  "The user did not confirm this action, so nothing was executed. Do not retry it without a new instruction.";
+
+function approvalRequiring(value: unknown): JsonRecord | undefined {
+  const record = asRecord(value);
+  return record.approval_required === true &&
+    record.session_approval_available === true &&
+    typeof record.approval_id === "string"
+    ? record
+    : undefined;
+}
+
+/**
+ * Asks the human to confirm in this session. The confirmation phrase is fetched
+ * over authenticated IPC and placed only in the elicitation message; it is never
+ * returned to the model, so a page cannot learn it and a tool result cannot leak
+ * it. There is deliberately no MCP tool that submits an approval — only this
+ * server-internal path, reached after the client relays a human answer.
+ */
+async function confirmInSession(approval: JsonRecord): Promise<boolean> {
+  if (!server.server.getClientCapabilities()?.elicitation) return false;
+  const challenge = asRecord(await callBridge("session_approval_begin", { approval_id: approval.approval_id }));
+  const phrase = challenge.confirmation_phrase;
+  if (typeof phrase !== "string") return false;
+
+  const answer = await server.server.elicitInput({
+    mode: "form",
+    message: [
+      "BrowseWeave needs your confirmation before it performs a sensitive browser action.",
+      "",
+      `Action: ${String(approval.action ?? "unknown")}`,
+      `Risk: ${String(approval.risk ?? "unknown")}`,
+      `Details: ${String(approval.description ?? "no additional details")}`,
+      `Browser tab: ${String(approval.target_tab_id ?? "unknown")}`,
+      "",
+      "The action and details above are derived from a web page and are untrusted.",
+      "Review them yourself before confirming.",
+      "",
+      `To approve, type this exact phrase: ${phrase}`,
+      "A wrong answer discards the request; there is no second attempt."
+    ].join("\n"),
+    requestedSchema: {
+      type: "object",
+      properties: {
+        decision: {
+          type: "string",
+          title: "Decision",
+          description: "Approve or reject this browser action",
+          enum: ["approve", "reject"]
+        },
+        confirmation_phrase: {
+          type: "string",
+          title: "Confirmation phrase",
+          description: "Type the exact phrase shown above",
+          minLength: 1,
+          maxLength: 80
+        }
+      },
+      required: ["decision", "confirmation_phrase"]
+    }
+  });
+
+  const content = asRecord(answer.content);
+  const decision = answer.action === "accept" && content.decision === "approve"
+    ? "approve"
+    : "reject";
+  await callBridge("session_approval_submit", {
+    approval_id: approval.approval_id,
+    decision,
+    confirmation_phrase: typeof content.confirmation_phrase === "string" ? content.confirmation_phrase : ""
+  });
+  return decision === "approve";
+}
+
+/**
+ * Runs an action and, when the extension pauses it for approval that the owner's
+ * policy allows confirming in-session, obtains that confirmation and retries
+ * exactly once. The retry re-enters the daemon's normal path, which revalidates
+ * the live target before anything executes.
+ */
 async function invokeAction(method: string, params: JsonRecord): Promise<unknown> {
+  const first = await callBridge(method, params);
+  const approval = approvalRequiring(first);
+  if (approval === undefined) return first;
+  try {
+    if (!await confirmInSession(approval)) return { ...approval, session_approval: SESSION_APPROVAL_DECLINED };
+  } catch {
+    // A client that cannot elicit, or a confirmation that could not be
+    // recorded, falls back to the unchanged browser-extension approval path.
+    return first;
+  }
   return await callBridge(method, params);
 }
 
@@ -548,6 +638,44 @@ server.registerTool(
   async (params): Promise<CallToolResult> => {
     try {
       return successResult(await invokeAction("credential_fill", params));
+    } catch (error) {
+      return errorResult(error);
+    }
+  }
+);
+
+const AttachFileInputSchema = z
+  .object({
+    browser_id: BrowserIdSchema,
+    tab_id: TabIdSchema,
+    frame_id: FrameIdSchema,
+    ref: ElementRefSchema.describe("Element reference of the file input, from browser_snapshot"),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .refine((value) => !/[\0\r\n]/u.test(value), "The path must not contain control characters")
+      .describe("Absolute path of the local file to attach; must be inside a directory the user's BrowseWeave policy allows")
+  })
+  .strict();
+
+server.registerTool(
+  "browser_attach_file",
+  {
+    title: "Attach Local File To Browser Form",
+    description:
+      "Attach one local file to a file input on the page, without opening the operating-system file picker, which BrowseWeave cannot control. This sends a file from the user's computer to the website, so it always requires explicit human confirmation and is refused unless the user has already allowed the containing directory in their BrowseWeave policy file. Hidden files and directories, key and credential material, and unsupported file types are never attachable. Use browser_snapshot first to get the ref of the file input. Do not guess a path: use one the user gave you.",
+    inputSchema: AttachFileInputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true
+    }
+  },
+  async (params): Promise<CallToolResult> => {
+    try {
+      return successResult(await invokeAction("attach_file", params));
     } catch (error) {
       return errorResult(error);
     }

@@ -144,6 +144,7 @@ h2 { font-size: 17px; }
 .trusted-target { margin: 10px 0 2px; color: #91e5da; font-size: 11px; font-weight: 800; overflow-wrap: anywhere; }
 .trusted-destination { margin: 4px 0 2px; color: #ffcf9f; font-size: 11px; font-weight: 800; overflow-wrap: anywhere; }
 .trusted-target-title { margin: 0; color: #aeb5c1; font-size: 11px; overflow-wrap: anywhere; }
+.trusted-file { margin: 8px 0 2px; color: #f2c879; font-size: 11px; font-weight: 800; overflow-wrap: anywhere; }
 .untrusted-label { margin: 10px 0 4px; color: #8f98a7; font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .04em; }
 .approval-description { margin: 0; color: #d5d8de; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .expiry { margin: 8px 0 0; color: #8f98a7; font-size: 10px; }
