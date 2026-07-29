@@ -16,6 +16,7 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 - Page snapshots read frames concurrently with a bounded limit rather than one at a time, so a page with many third-party iframes costs the slowest frame instead of their sum. Frame ordering and truncation behaviour are unchanged.
 - Split the privileged extension background runtime into focused files within the same module: a dependency-free browser-API and error surface, the managed-tab ownership ledger, the credential-channel storage, and the per-installation identity and signing key. Behaviour is unchanged; the composition file is now well inside its size budget.
+- Split the daemon runtime into focused files within the same module: nonce/proof/setup-encryption primitives, wire parsing and signature verification, the bounded audit log, and the pinned extension-key registry. The published `dist/src/daemon.js` export surface is unchanged.
 - Per-tab mutation pacing is adaptive: editing and scrolling continue at a tighter interval, actions that commit or navigate keep the previous conservative interval, and a tab backs off well beyond both for a period after a detected challenge, 403, or 429. Pacing remains per tab rather than per origin or IP.
 
 ## [0.1.0-beta.2] - 2026-07-28
