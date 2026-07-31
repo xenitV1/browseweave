@@ -4,6 +4,10 @@
 
 <h1 align="center">BrowseWeave</h1>
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/browseweave"><img src="https://img.shields.io/npm/v/browseweave?label=npm&logo=npm&color=CB3837" alt="BrowseWeave on npm"></a>
+</p>
+
 BrowseWeave lets local MCP-compatible AI clients use the web pages already open in your real browser. It gives the model a compact semantic view for routine work, a screenshot only when visual inspection matters, and controlled interaction with ordinary HTTP(S) pages.
 
 The MCP transport is client-neutral. Automatic configuration is currently implemented for Codex, Claude Code, Cursor, and OpenCode; other local stdio MCP clients require a manually reviewed command/args entry. The browser preview is deliberately limited to Google Chrome and Zen.
@@ -92,6 +96,29 @@ Edge, Brave, Vivaldi, Firefox, Safari, remote MCP transports, and hosted browser
 ## Guided beta setup
 
 Prerequisites: a systemd-based Linux desktop where `systemctl --user` works, Node.js 22.14.0 or newer, a visible interactive terminal, and Chrome 116+ or a Zen release based on Firefox 142+. Non-systemd distributions are not supported by this beta installer. The command deliberately refuses a background pipe or hidden non-interactive shell because the browser consent must remain visible.
+
+### Install globally from npm
+
+Install the exact public beta globally, then start the guided setup for every
+detected supported browser and MCP client:
+
+```bash
+npm install --global browseweave@0.1.0-beta.6
+browseweave setup --all-browsers
+```
+
+The global command also supports targeted setup and diagnostics without `npx`:
+
+```bash
+browseweave setup --browser chrome --client codex
+browseweave setup --browser zen --client claude-code --client cursor
+browseweave doctor
+browseweave mcp-config generic
+```
+
+After a global install, any pinned `npx browseweave@0.1.0-beta.6 ...` example
+below can be shortened to `browseweave ...`. The version remains explicitly
+pinned so upgrades happen only when requested.
 
 The public beta remains version-pinned. From a source checkout, the all-browser
 wrapper prepares every detected supported browser and every detected supported
@@ -264,6 +291,13 @@ Normal uninstall removes the native registration and background service but pres
 
 ```bash
 npx browseweave@0.1.0-beta.6 local-uninstall
+```
+
+For a global npm installation, run the cleanup command before removing the CLI:
+
+```bash
+browseweave local-uninstall
+npm uninstall --global browseweave
 ```
 
 Only when the user explicitly wants those local application directories deleted, add `--purge-data`. Then remove BrowseWeave separately from Chrome or Zen to clear browser-owned extension storage. Purge deliberately preserves Zen's browser-profile portal preference.
