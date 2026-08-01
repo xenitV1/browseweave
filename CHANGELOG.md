@@ -6,6 +6,19 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.11] - 2026-08-01
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
+### Fixed
+
+- Two MCP client sessions can now use one browser profile at the same time without destroying each other's work. Managed tabs were tracked in a single ledger with no owner, so every agent listed, drove, and closed every other agent's tabs: one agent's `browser_cleanup_tabs` closed the tabs another was still reading, and a blank tab opened for one agent's approval could be adopted and navigated away by another. Each managed tab now records the client session that opened it. `browser_close_tab` and a default `browser_cleanup_tabs` act only on the caller's tabs, an explicit `tab_ids` list is still intersected with them, every mutating action on another agent's managed tab is refused with `tab_owned_by_another_agent`, and only an agent's own blank tab is adoptable when a risky `browser_new_tab` is retried after approval. `browser_list_tabs` reports `managed_by_you` next to `managed`. Tabs the user opened are not managed and stay available to every agent exactly as before, and the extension popup's own cleanup button still closes every managed tab, because the person owns the browser.
+- The managed-tab budget is now 10 per agent under a shared ceiling of 20 per browser profile, so one agent can no longer consume the whole allowance before another connects. `browser_list_tabs`, `browser_cleanup_tabs`, and the `managed_tab_limit` error report both the caller's count and the profile total.
+
+### Security
+
+- The session identity is minted by the MCP server process, one per client session, and travels inside the IPC parameters already covered by the client proof. It is an isolation boundary between cooperating agents, not a security one: a local process holding the IPC token could claim any identity, but such a process already had full authority. A command that carries no recognizable identity owns nothing and cannot act on any agent's managed tabs. A ledger written before ownership existed is adopted as unowned, so no agent inherits those tabs by connecting first, and a cleanup can still collect them.
+
 ## [0.1.0-beta.10] - 2026-08-01
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
@@ -168,7 +181,8 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.10...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.11...HEAD
+[0.1.0-beta.11]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.10...v0.1.0-beta.11
 [0.1.0-beta.10]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.9...v0.1.0-beta.10
 [0.1.0-beta.9]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.8...v0.1.0-beta.9
 [0.1.0-beta.8]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.7...v0.1.0-beta.8

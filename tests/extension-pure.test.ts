@@ -10,7 +10,14 @@ import {
   canCreateManagedTab,
   classifyRisk,
   compactSelectOptions,
+  MAX_MANAGED_TABS_TOTAL,
+  agentOwnsManagedTab,
+  canCreateManagedTabForAgent,
   compactSubframeUrl,
+  isAgentId,
+  managedTabOwner,
+  normalizeManagedTabLedger,
+  selectManagedTabsForAgentCleanup,
   diffSnapshots,
   externalNavigationRisk,
   fillBatchKeystrokeIntervalMs,
@@ -237,6 +244,71 @@ describe("BrowseWeave extension pure safety functions", () => {
     expect(output.searchParams.get("access_token")).toBe("[MASKED]");
     expect(output.searchParams.get("session-id")).toBe("[MASKED]");
     expect(output.hash).toBe("#fragment-redacted");
+  });
+
+  it("scopes managed tabs to the agent that opened them", () => {
+    const alice = "11111111-2222-4333-8444-555555555555";
+    const bob = "99999999-8888-4777-8666-555555555555";
+    expect(isAgentId(alice)).toBe(true);
+    expect(isAgentId("not-an-agent")).toBe(false);
+    expect(isAgentId(undefined)).toBe(false);
+
+    const ledger = [{ id: 1, owner: alice }, { id: 2, owner: bob }, { id: 3, owner: null }];
+    expect(agentOwnsManagedTab(ledger, 1, alice)).toBe(true);
+    // Another agent's tab: readable, never drivable.
+    expect(agentOwnsManagedTab(ledger, 2, alice)).toBe(false);
+    // A ledger written before ownership existed answers to nobody, so whichever
+    // agent connects first cannot claim it.
+    expect(agentOwnsManagedTab(ledger, 3, alice)).toBe(false);
+    expect(agentOwnsManagedTab(ledger, 3, bob)).toBe(false);
+    // A tab BrowseWeave never opened is not in the ledger at all.
+    expect(managedTabOwner(ledger, 99)).toBeUndefined();
+    // No identity means no ownership, so a command without one cannot drive
+    // tabs that belong to a real agent.
+    expect(agentOwnsManagedTab(ledger, 1, null)).toBe(false);
+
+    // A malformed owner degrades to unowned rather than failing the ledger.
+    expect(normalizeManagedTabLedger([{ id: 4, owner: "bogus" }])).toEqual([{ id: 4, owner: null }]);
+    expect(normalizeManagedTabLedger([{ id: 5 }, { id: 5, owner: alice }])).toEqual([{ id: 5, owner: null }]);
+    expect(normalizeManagedTabLedger("nope")).toEqual([]);
+  });
+
+  it("gives each agent its own allowance under one shared ceiling", () => {
+    const alice = "11111111-2222-4333-8444-555555555555";
+    const bob = "99999999-8888-4777-8666-555555555555";
+    const own = (owner: string, count: number, from: number) =>
+      Array.from({ length: count }, (unused, index) => ({ id: from + index, owner }));
+
+    // Alice at her allowance cannot open more, but Bob is untouched by it:
+    // neither agent can starve the other by opening first.
+    const aliceFull = own(alice, MAX_MANAGED_TABS, 1);
+    expect(canCreateManagedTabForAgent(aliceFull, alice)).toBe(false);
+    expect(canCreateManagedTabForAgent(aliceFull, bob)).toBe(true);
+
+    // The shared ceiling still bounds the browser itself.
+    const atCeiling = [...own(alice, MAX_MANAGED_TABS, 1), ...own(bob, MAX_MANAGED_TABS, 100)];
+    expect(atCeiling).toHaveLength(MAX_MANAGED_TABS_TOTAL);
+    expect(canCreateManagedTabForAgent(atCeiling, bob)).toBe(false);
+    expect(canCreateManagedTabForAgent(atCeiling, "77777777-6666-4555-8444-333333333333")).toBe(false);
+
+    // Without an identity nothing may be opened as owned.
+    expect(canCreateManagedTabForAgent([], null)).toBe(false);
+  });
+
+  it("cleans up only the caller's tabs, plus the ones no agent owns", () => {
+    const alice = "11111111-2222-4333-8444-555555555555";
+    const bob = "99999999-8888-4777-8666-555555555555";
+    const ledger = [{ id: 1, owner: alice }, { id: 2, owner: bob }, { id: 3, owner: null }];
+
+    // The default cleanup that ends a session must not destroy the other
+    // session's work; unowned tabs are collectable so they cannot hold the
+    // shared ceiling forever with nobody able to reclaim them.
+    expect(selectManagedTabsForAgentCleanup(ledger, alice)).toEqual([1, 3]);
+    expect(selectManagedTabsForAgentCleanup(ledger, bob)).toEqual([2, 3]);
+    // An explicit request is still intersected with what the caller may close.
+    expect(selectManagedTabsForAgentCleanup(ledger, alice, [1, 2, 3])).toEqual([1, 3]);
+    expect(selectManagedTabsForAgentCleanup(ledger, alice, [2])).toEqual([]);
+    expect(selectManagedTabsForAgentCleanup(ledger, null)).toEqual([3]);
   });
 
   it("compacts only an oversized subframe URL, and keeps the omission visible", () => {

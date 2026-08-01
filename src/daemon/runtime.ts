@@ -140,6 +140,8 @@ interface PendingCommand {
   approvalFingerprint?: string;
   /** How many owner-policy grants this one IPC request already consumed. */
   policyApprovals: number;
+  /** Session that issued it; a retry must stay the same agent to keep its tab. */
+  clientId?: string;
   startedAt: number;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -1416,7 +1418,11 @@ export class BrowseWeaveDaemon {
       void this.#handleAttachFile(socket, request.id, session, request.params);
       return;
     }
-    const actionParams = jsonObjectWithout(request.params, new Set(["browser_id"]));
+    // The identity scopes managed tabs; it is never part of the action's own
+    // parameters, so it must not reach the page-facing payload or the approval
+    // fingerprint computed from it.
+    const clientId = typeof request.params.client_id === "string" ? request.params.client_id : undefined;
+    const actionParams = jsonObjectWithout(request.params, new Set(["browser_id", "client_id"]));
     const approvedGrant = this.#findApprovalForParams(
       session.browserId,
       request.method,
@@ -1432,7 +1438,11 @@ export class BrowseWeaveDaemon {
       false,
       undefined,
       approvedGrant !== undefined,
-      approvedGrant?.approvalId
+      approvedGrant?.approvalId,
+      undefined,
+      undefined,
+      0,
+      clientId
     );
   }
 
@@ -1674,7 +1684,8 @@ export class BrowseWeaveDaemon {
     revalidatingApprovalId?: string,
     approvedGrantId?: string,
     approvalSource?: ApprovalSource,
-    policyApprovals = 0
+    policyApprovals = 0,
+    clientId?: string
   ): void {
     if (session.socket.readyState !== WebSocket.OPEN) {
       if (approvedGrantId !== undefined) {
@@ -1714,7 +1725,8 @@ export class BrowseWeaveDaemon {
         approved: true,
         approval_id: approvedGrantId,
         approval_fingerprint: approvalFingerprint,
-        approval_source: approvalSource ?? "session"
+        approval_source: approvalSource ?? "session",
+        ...(clientId === undefined ? {} : { client_id: clientId })
       };
     } else {
       command = {
@@ -1723,7 +1735,8 @@ export class BrowseWeaveDaemon {
         action,
         payload: params,
         revalidate_only: revalidateOnly,
-        approved: false
+        approved: false,
+        ...(clientId === undefined ? {} : { client_id: clientId })
       };
     }
     const serialized = JSON.stringify(command);
@@ -1781,6 +1794,7 @@ export class BrowseWeaveDaemon {
       startedAt,
       timer
     };
+    if (clientId !== undefined) pending.clientId = clientId;
     if (revalidatingApprovalId !== undefined) pending.revalidatingApprovalId = revalidatingApprovalId;
     if (approvedGrantId !== undefined) pending.approvedGrantId = approvedGrantId;
     if (command.approved) pending.approvalFingerprint = command.approval_fingerprint;
@@ -1935,7 +1949,8 @@ export class BrowseWeaveDaemon {
             undefined,
             consumedGrant.approvalId,
             consumedGrant.approvalSource,
-            pending.policyApprovals
+            pending.policyApprovals,
+            pending.clientId
           );
           return;
         }
@@ -2122,7 +2137,8 @@ export class BrowseWeaveDaemon {
       undefined,
       randomUUID(),
       "policy",
-      pending.policyApprovals + 1
+      pending.policyApprovals + 1,
+      pending.clientId
     );
     return true;
   }
@@ -2209,7 +2225,11 @@ export class BrowseWeaveDaemon {
       false,
       undefined,
       approvedGrant !== undefined,
-      approvedGrant?.approvalId
+      approvedGrant?.approvalId,
+      undefined,
+      undefined,
+      0,
+      typeof params.client_id === "string" ? params.client_id : undefined
     );
   }
 

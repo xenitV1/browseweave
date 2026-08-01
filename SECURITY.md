@@ -2,7 +2,7 @@
 
 ## Supported release status
 
-`0.1.0-beta.10` is a systemd-based Linux developer preview, not a production or browser-store release. It requires a working systemd user service manager; non-systemd Linux service adapters are unavailable. The unpacked Chrome and temporary Zen paths require visible human consent. macOS is implemented and test-covered but not live-supported; Windows setup is unavailable. Security reports should identify the exact package version, operating system, browser, extension target, and MCP client without including private page data.
+`0.1.0-beta.11` is a systemd-based Linux developer preview, not a production or browser-store release. It requires a working systemd user service manager; non-systemd Linux service adapters are unavailable. The unpacked Chrome and temporary Zen paths require visible human consent. macOS is implemented and test-covered but not live-supported; Windows setup is unavailable. Security reports should identify the exact package version, operating system, browser, extension target, and MCP client without including private page data.
 
 ## Trust boundaries
 
@@ -15,7 +15,7 @@
 
 ## Native-helper and guided setup enrollment
 
-`npx browseweave@0.1.0-beta.10 setup` is a guided installer that requires a visible interactive terminal; it is not a browser-security bypass. Chrome still requires **Developer mode** and **Load unpacked**; Zen still requires **Load Temporary Add-on**. BrowseWeave does not silently install an extension, enable permissions, select a browser profile, or bypass a browser-owned confirmation.
+`npx browseweave@0.1.0-beta.11 setup` is a guided installer that requires a visible interactive terminal; it is not a browser-security bypass. Chrome still requires **Developer mode** and **Load unpacked**; Zen still requires **Load Temporary Add-on**. BrowseWeave does not silently install an extension, enable permissions, select a browser profile, or bypass a browser-owned confirmation.
 
 Initial enrollment uses a private, short-lived loopback setup page. After loading the extension, the human returns to that page and selects **Connect this browser**. The extension Settings button labeled **Connect BrowseWeave** is a separate later repair/reconnect path through native messaging.
 
@@ -28,6 +28,23 @@ The native host creates one short-lived local setup session over authenticated l
 The setup request binds fresh nonces, the daemon instance, extension origin, browser installation identity, and P-256 public key. The daemon returns the pairing credential only through the authenticated setup exchange. A setup response alone is not success. The first derived-key reconnect is an explicitly signed `provisioning` phase: it proves receipt but cannot pin the key or expose a command-capable browser session. Only after the extension has stored and read back the credential does it make a separately signed `persisted` reconnect; that second phase atomically pins the key and completes the installer receipt. A storage failure therefore leaves the previous registry credential usable. A lost persisted request is retried, while a lost acknowledgement is reconciled by new-token authentication and an idempotent persisted reconnect. The old stored credential is restored only after the daemon positively authenticates it, so an acknowledgement loss cannot roll back a committed credential. Setup material is single-purpose, expires quickly, and is invalidated after success or cancellation.
 
 For Zen Flatpak, the guided installer enables Firefox's native-messaging portal preference only after initial pairing and only in exactly one active profile whose directory and metadata are owned by the current user. It refuses ambiguous, foreign-owned, symlinked, or changed profile files and preserves unrelated `user.js` content. If the preference changed, the user must fully restart Zen once. Zen may then show a one-time operating-system prompt; approve it only immediately after the user's own **Connect BrowseWeave** action and cancel an unexpected prompt.
+
+## Several agents on one browser profile
+
+A managed tab records the MCP client session that opened it, and close, cleanup,
+and every mutating action are scoped to that session.
+
+This is an isolation boundary between cooperating agents, not a security one.
+The identity is minted by the MCP server process and declared to the daemon, so
+a local process holding the IPC token could claim any identity — but that
+process already had full authority over the browser, so it gains nothing. The
+scoping exists to stop two honest sessions from destroying each other's work,
+and it is not a defence against a hostile local process.
+
+A command carrying no recognizable identity owns nothing and cannot act on any
+agent's managed tabs. A ledger written before ownership existed is adopted as
+unowned, so no agent inherits those tabs by connecting first; a cleanup can still
+collect them, which keeps them from holding the shared ceiling forever.
 
 ## Agent-skill installation
 
@@ -144,8 +161,8 @@ BrowseWeave tracks only tabs it created, enforces a maximum of 10 concurrently o
 ## If something looks wrong
 
 1. Disconnect or remove the extension.
-2. Remove the exact native registration and stop the per-user daemon with `npx browseweave@0.1.0-beta.10 local-uninstall`, or use the platform's service manager when the CLI is unavailable.
-3. Run `npx browseweave@0.1.0-beta.10 doctor` and preserve only the metadata audit log.
+2. Remove the exact native registration and stop the per-user daemon with `npx browseweave@0.1.0-beta.11 local-uninstall`, or use the platform's service manager when the CLI is unavailable.
+3. Run `npx browseweave@0.1.0-beta.11 doctor` and preserve only the metadata audit log.
 4. Do not post tokens, page contents, screenshots, or private account data in a public issue.
 
 ## Report a vulnerability

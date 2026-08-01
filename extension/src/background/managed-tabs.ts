@@ -2,22 +2,47 @@
  * Ownership ledger for tabs BrowseWeave itself opened. Cleanup and single-tab
  * close intersect requests with this ledger, so a tab the user already had open
  * can never be closed by BrowseWeave.
+ *
+ * Each entry also records which agent opened the tab. One browser profile can
+ * serve several MCP client sessions at once, and without an owner they share a
+ * single pool: each one lists, drives, and closes the others' tabs, and the
+ * cleanup that ends one session destroys work in progress in another. The owner
+ * scopes those operations. It is an isolation boundary between cooperating
+ * agents, not a security one — a local process holding the IPC token could
+ * claim any identity, but it already had full authority.
  */
 import {
   MAX_MANAGED_TABS,
-  canCreateManagedTab,
-  isManagedTabOwned,
-  managedTabsAfterClose,
+  MAX_MANAGED_TABS_TOTAL,
+  agentOwnsManagedTab,
+  canCreateManagedTabForAgent,
+  isAgentId,
+  managedTabOwner,
+  normalizeManagedTabLedger,
   normalizeManagedTabIds,
-  selectManagedTabsForCleanup
+  selectManagedTabsForAgentCleanup,
+  type ManagedTabEntry
 } from "../shared/pure";
 import { BridgeError, extensionBrowser, sessionStorageArea } from "./environment";
 
 const MANAGED_TABS_SESSION_KEY = "browseweave_managed_tabs_v1";
 
-const managedTabIds = new Set<number>();
+/** tab ID -> owning agent, or null for a tab recorded before ownership existed. */
+const managedTabs = new Map<number, string | null>();
 let managedTabsLoaded = false;
 let managedTabsLock: Promise<void> = Promise.resolve();
+
+/** Whether a managed tab is this agent's, another agent's, or not managed. */
+export type ManagedTabAccess = "unmanaged" | "owned" | "foreign";
+
+function ledgerEntries(): ManagedTabEntry[] {
+  return normalizeManagedTabLedger([...managedTabs].map(([id, owner]) => ({ id, owner })));
+}
+
+function ownedCount(entries: readonly ManagedTabEntry[], agent: unknown): number {
+  if (!isAgentId(agent)) return 0;
+  return entries.filter((entry) => entry.owner === agent).length;
+}
 
 function managedTabsStateError(message: string, cause?: unknown): BridgeError {
   return new BridgeError(
@@ -65,15 +90,30 @@ export async function ensureManagedTabsLoadedUnlocked(): Promise<void> {
     throw managedTabsStateError("The managed-tab ownership ledger is invalid. No tab action was taken.");
   }
   const record = value as Record<string, unknown>;
-  const rawIds = record.tab_ids;
-  const normalized = normalizeManagedTabIds(rawIds);
+  if (record.version === 1) {
+    // Written before ownership existed. Those tabs belong to no agent, so no
+    // agent may drive them; a cleanup can still collect them.
+    const rawIds = record.tab_ids;
+    const normalized = normalizeManagedTabIds(rawIds);
+    if (
+      !Array.isArray(rawIds) || rawIds.length !== normalized.length ||
+      normalized.length > MAX_MANAGED_TABS_TOTAL
+    ) {
+      throw managedTabsStateError("The managed-tab ownership ledger failed integrity checks. No tab action was taken.");
+    }
+    for (const id of normalized) managedTabs.set(id, null);
+    managedTabsLoaded = true;
+    return;
+  }
+  const rawTabs = record.tabs;
+  const entries = normalizeManagedTabLedger(rawTabs);
   if (
-    record.version !== 1 || !Array.isArray(rawIds) || rawIds.length !== normalized.length ||
-    normalized.length > MAX_MANAGED_TABS
+    record.version !== 2 || !Array.isArray(rawTabs) || rawTabs.length !== entries.length ||
+    entries.length > MAX_MANAGED_TABS_TOTAL
   ) {
     throw managedTabsStateError("The managed-tab ownership ledger failed integrity checks. No tab action was taken.");
   }
-  for (const id of normalized) managedTabIds.add(id);
+  for (const entry of entries) managedTabs.set(entry.id, entry.owner);
   managedTabsLoaded = true;
 }
 
@@ -83,8 +123,8 @@ async function persistManagedTabsUnlocked(): Promise<void> {
   try {
     await area.set({
       [MANAGED_TABS_SESSION_KEY]: {
-        version: 1,
-        tab_ids: normalizeManagedTabIds([...managedTabIds])
+        version: 2,
+        tabs: ledgerEntries()
       }
     });
   } catch (error) {
@@ -95,18 +135,18 @@ async function persistManagedTabsUnlocked(): Promise<void> {
 export function notifyManagedTabState(): void {
   void extensionBrowser.runtime.sendMessage({
     kind: "bridge:managed-tabs",
-    managed_tab_count: managedTabIds.size,
-    managed_tab_limit: MAX_MANAGED_TABS
+    managed_tab_count: managedTabs.size,
+    managed_tab_limit: MAX_MANAGED_TABS_TOTAL
   }).catch(() => undefined);
 }
 
 export async function reconcileManagedTabsUnlocked(): Promise<void> {
   let changed = false;
-  for (const id of [...managedTabIds]) {
+  for (const id of [...managedTabs.keys()]) {
     try {
       await extensionBrowser.tabs.get(id);
     } catch {
-      managedTabIds.delete(id);
+      managedTabs.delete(id);
       changed = true;
     }
   }
@@ -116,21 +156,29 @@ export async function reconcileManagedTabsUnlocked(): Promise<void> {
   }
 }
 
-export async function managedTabsSummary(): Promise<{ managed_tab_count: number; managed_tab_limit: number }> {
+export async function managedTabsSummary(agent: unknown): Promise<{
+  managed_tab_count: number;
+  managed_tab_limit: number;
+  managed_tab_total: number;
+  managed_tab_total_limit: number;
+}> {
   return withManagedTabsLock(async () => {
     await ensureManagedTabsLoadedUnlocked();
     await reconcileManagedTabsUnlocked();
-    return { managed_tab_count: managedTabIds.size, managed_tab_limit: MAX_MANAGED_TABS };
+    const entries = ledgerEntries();
+    return {
+      managed_tab_count: ownedCount(entries, agent),
+      managed_tab_limit: MAX_MANAGED_TABS,
+      managed_tab_total: entries.length,
+      managed_tab_total_limit: MAX_MANAGED_TABS_TOTAL
+    };
   });
 }
 
 export async function untrackManagedTab(id: number): Promise<void> {
   await withManagedTabsLock(async () => {
     await ensureManagedTabsLoadedUnlocked();
-    const remaining = managedTabsAfterClose([...managedTabIds], id);
-    if (remaining.length === managedTabIds.size) return;
-    managedTabIds.clear();
-    for (const tabIdValue of remaining) managedTabIds.add(tabIdValue);
+    if (!managedTabs.delete(id)) return;
     await persistManagedTabsUnlocked();
     notifyManagedTabState();
   });
@@ -140,19 +188,35 @@ export async function isManagedTab(id: number): Promise<boolean> {
   return withManagedTabsLock(async () => {
     await ensureManagedTabsLoadedUnlocked();
     await reconcileManagedTabsUnlocked();
-    return isManagedTabOwned([...managedTabIds], id);
+    return managedTabOwner(ledgerEntries(), id) !== undefined;
+  });
+}
+
+/**
+ * Classifies a tab for one agent. A tab BrowseWeave never opened stays
+ * "unmanaged" and remains usable by every agent exactly as before: only tabs
+ * BrowseWeave owns are scoped.
+ */
+export async function managedTabAccess(id: number, agent: unknown): Promise<ManagedTabAccess> {
+  return withManagedTabsLock(async () => {
+    await ensureManagedTabsLoadedUnlocked();
+    await reconcileManagedTabsUnlocked();
+    const entries = ledgerEntries();
+    if (managedTabOwner(entries, id) === undefined) return "unmanaged";
+    return agentOwnsManagedTab(entries, id, agent) ? "owned" : "foreign";
   });
 }
 
 export async function createManagedTab(
   url: string,
   active: boolean,
+  agent: unknown,
   beforeCreate: () => Promise<void>
 ): Promise<browser.tabs.Tab> {
   return withManagedTabsLock(async () => {
     await ensureManagedTabsLoadedUnlocked();
     await reconcileManagedTabsUnlocked();
-    return createManagedTabUnlocked(url, active, beforeCreate);
+    return createManagedTabUnlocked(url, active, agent, beforeCreate);
   });
 }
 
@@ -170,17 +234,23 @@ function isBlankTabUrl(url: string | undefined): boolean {
  * same tab instead of leaking another one into the managed budget, which is why
  * adoption comes before creation. During an approval-only recheck nothing may
  * be created at all, so the absence of an adoptable tab is an error there.
+ *
+ * Only this agent's own blank tab is adoptable. Adopting another agent's would
+ * navigate that agent's tab away and bind this agent's approval to it.
  */
 export async function blankManagedTabForNavigation(
   active: boolean,
-  adoptOnly: boolean
+  adoptOnly: boolean,
+  agent: unknown
 ): Promise<browser.tabs.Tab> {
   return withManagedTabsLock(async () => {
     await ensureManagedTabsLoadedUnlocked();
     await reconcileManagedTabsUnlocked();
-    for (const id of normalizeManagedTabIds([...managedTabIds])) {
+    const entries = ledgerEntries();
+    for (const entry of entries) {
+      if (!agentOwnsManagedTab(entries, entry.id, agent)) continue;
       try {
-        const candidate = await extensionBrowser.tabs.get(id);
+        const candidate = await extensionBrowser.tabs.get(entry.id);
         if (isBlankTabUrl(candidate.url)) return candidate;
       } catch {
         // Reconciliation already dropped tabs that no longer exist.
@@ -192,21 +262,31 @@ export async function blankManagedTabForNavigation(
         "The blank BrowseWeave tab this open request was bound to is gone. Nothing was executed."
       );
     }
-    return createManagedTabUnlocked("about:blank", active, async () => undefined);
+    return createManagedTabUnlocked("about:blank", active, agent, async () => undefined);
   });
 }
 
 async function createManagedTabUnlocked(
   url: string,
   active: boolean,
+  agent: unknown,
   beforeCreate: () => Promise<void>
 ): Promise<browser.tabs.Tab> {
-  if (!canCreateManagedTab([...managedTabIds])) {
+  const entries = ledgerEntries();
+  if (!canCreateManagedTabForAgent(entries, agent)) {
+    const atTotal = entries.length >= MAX_MANAGED_TABS_TOTAL;
     throw new BridgeError(
       "managed_tab_limit",
-      `This browser profile already has ${MAX_MANAGED_TABS} open tabs created by BrowseWeave. Close one or run browser_cleanup_tabs before opening another.`,
+      atTotal
+        ? `Every connected agent together already has ${MAX_MANAGED_TABS_TOTAL} open tabs created by BrowseWeave in this browser profile. Close one or run browser_cleanup_tabs before opening another.`
+        : `This agent already has ${MAX_MANAGED_TABS} open tabs created by BrowseWeave. Close one or run browser_cleanup_tabs before opening another.`,
       undefined,
-      { managed_tab_count: managedTabIds.size, managed_tab_limit: MAX_MANAGED_TABS }
+      {
+        managed_tab_count: ownedCount(entries, agent),
+        managed_tab_limit: MAX_MANAGED_TABS,
+        managed_tab_total: entries.length,
+        managed_tab_total_limit: MAX_MANAGED_TABS_TOTAL
+      }
     );
   }
   await beforeCreate();
@@ -214,7 +294,7 @@ async function createManagedTabUnlocked(
   if (typeof created.id !== "number" || !Number.isSafeInteger(created.id) || created.id <= 0) {
     throw new BridgeError("tab_not_found", "The new browser tab did not receive a valid ID and could not be managed safely.");
   }
-  managedTabIds.add(created.id);
+  managedTabs.set(created.id, isAgentId(agent) ? agent : null);
   try {
     await persistManagedTabsUnlocked();
   } catch (storageError) {
@@ -225,7 +305,7 @@ async function createManagedTabUnlocked(
     } catch {
       // Keep the ID in memory when even rollback fails; this worker will still enforce the cap.
     }
-    if (rolledBack) managedTabIds.delete(created.id);
+    if (rolledBack) managedTabs.delete(created.id);
     notifyManagedTabState();
     throw storageError;
   }
@@ -238,47 +318,90 @@ export async function managedTabIdList(): Promise<number[]> {
   return withManagedTabsLock(async () => {
     await ensureManagedTabsLoadedUnlocked();
     await reconcileManagedTabsUnlocked();
-    return normalizeManagedTabIds([...managedTabIds]);
+    return normalizeManagedTabIds([...managedTabs.keys()]);
   });
 }
 
-export async function cleanupManagedTabs(requested: unknown): Promise<Record<string, unknown>> {
+/** Managed tabs with their owners, so a listing can say which are the caller's. */
+export async function managedTabLedger(): Promise<ManagedTabEntry[]> {
+  return withManagedTabsLock(async () => {
+    await ensureManagedTabsLoadedUnlocked();
+    await reconcileManagedTabsUnlocked();
+    return ledgerEntries();
+  });
+}
+
+export async function cleanupManagedTabs(requested: unknown, agent: unknown): Promise<Record<string, unknown>> {
   return withManagedTabsLock(async () => {
     await ensureManagedTabsLoadedUnlocked();
     await reconcileManagedTabsUnlocked();
     if (requested !== undefined) {
       const normalized = normalizeManagedTabIds(requested);
-      if (!Array.isArray(requested) || requested.length > MAX_MANAGED_TABS || requested.length !== normalized.length) {
-        throw new BridgeError("invalid_tab_ids", `tab_ids must contain at most ${MAX_MANAGED_TABS} unique positive integer tab IDs.`);
+      if (
+        !Array.isArray(requested) || requested.length > MAX_MANAGED_TABS_TOTAL ||
+        requested.length !== normalized.length
+      ) {
+        throw new BridgeError(
+          "invalid_tab_ids",
+          `tab_ids must contain at most ${MAX_MANAGED_TABS_TOTAL} unique positive integer tab IDs.`
+        );
       }
     }
-    const selected = selectManagedTabsForCleanup([...managedTabIds], requested);
-    const closed: number[] = [];
-    for (const id of selected) {
-      try {
-        await extensionBrowser.tabs.remove(id);
-        managedTabIds.delete(id);
-        closed.push(id);
-      } catch {
-        try {
-          await extensionBrowser.tabs.get(id);
-        } catch {
-          managedTabIds.delete(id);
-        }
-      }
-    }
-    await persistManagedTabsUnlocked();
-    notifyManagedTabState();
-    const remaining = normalizeManagedTabIds([...managedTabIds]);
+    const closed = await closeSelectedUnlocked(selectManagedTabsForAgentCleanup(ledgerEntries(), agent, requested));
+    const entries = ledgerEntries();
     return {
       closed_tab_ids: closed,
-      remaining_tab_ids: remaining,
-      managed_tab_count: remaining.length
+      // Only this agent's remaining tabs: another agent's are not this caller's
+      // to track, and reporting them invites acting on them.
+      remaining_tab_ids: entries.filter((entry) => isAgentId(agent) && entry.owner === agent).map((entry) => entry.id),
+      managed_tab_count: ownedCount(entries, agent),
+      managed_tab_total: entries.length
+    };
+  });
+}
+
+async function closeSelectedUnlocked(selected: readonly number[]): Promise<number[]> {
+  const closed: number[] = [];
+  for (const id of selected) {
+    try {
+      await extensionBrowser.tabs.remove(id);
+      managedTabs.delete(id);
+      closed.push(id);
+    } catch {
+      try {
+        await extensionBrowser.tabs.get(id);
+      } catch {
+        managedTabs.delete(id);
+      }
+    }
+  }
+  await persistManagedTabsUnlocked();
+  notifyManagedTabState();
+  return closed;
+}
+
+/**
+ * Closes every managed tab regardless of owner.
+ *
+ * This is the human's own button in the extension popup, not an agent command.
+ * The person owns the browser, so agent scoping does not apply to them: a
+ * cleanup they ask for that left another agent's tabs open would not be the
+ * cleanup they asked for.
+ */
+export async function cleanupEveryManagedTab(): Promise<Record<string, unknown>> {
+  return withManagedTabsLock(async () => {
+    await ensureManagedTabsLoadedUnlocked();
+    await reconcileManagedTabsUnlocked();
+    const closed = await closeSelectedUnlocked(ledgerEntries().map((entry) => entry.id));
+    return {
+      closed_tab_ids: closed,
+      remaining_tab_ids: normalizeManagedTabIds([...managedTabs.keys()]),
+      managed_tab_count: managedTabs.size
     };
   });
 }
 
 /** Current ledger size without forcing a load; callers use it for status only. */
 export function managedTabCount(): number {
-  return managedTabIds.size;
+  return managedTabs.size;
 }

@@ -23,7 +23,15 @@ describe("extension security structure", () => {
   it("checks managed ownership before a single tab can be removed", () => {
     const start = background.indexOf('if (action === "close_tab")');
     const closeCase = background.slice(start, background.indexOf('if (action === "cleanup_tabs")', start));
-    expect(ordered(closeCase, ["isManagedTab(id)", '"tab_not_managed"', "tabs.remove(id)", "untrackManagedTab(id)"])).toBe(true);
+    expect(ordered(closeCase, [
+      "managedTabAccess(id, agent)",
+      '"unmanaged"',
+      '"tab_not_managed"',
+      '"foreign"',
+      '"tab_owned_by_another_agent"',
+      "tabs.remove(id)",
+      "untrackManagedTab(id)"
+    ])).toBe(true);
   });
 
   it("guards every tab of a multi-tab read and reports the ones it could not read", () => {
@@ -63,7 +71,7 @@ describe("extension security structure", () => {
     // guard receives that tab as the live approval target before any navigation.
     expect(ordered(newTabCase, [
       "needsLiveBinding",
-      "blankManagedTabForNavigation(active, revalidateOnly)",
+      "blankManagedTabForNavigation(active, revalidateOnly, agent)",
       "await guardNavigationRisk(",
       "hostId,",
       "tabs.update(hostId, { url })"
@@ -77,7 +85,15 @@ describe("extension security structure", () => {
       adoption.indexOf("export async function blankManagedTabForNavigation"),
       adoption.indexOf("async function createManagedTabUnlocked")
     );
-    expect(ordered(adoptionBody, ["isBlankTabUrl(candidate.url)", "if (adoptOnly)", '"approval_context_changed"', "createManagedTabUnlocked"])).toBe(true);
+    // Only this agent's own blank tab is adoptable: adopting another agent's
+    // would navigate its tab away and bind this agent's approval to it.
+    expect(ordered(adoptionBody, [
+      "agentOwnsManagedTab(entries, entry.id, agent)",
+      "isBlankTabUrl(candidate.url)",
+      "if (adoptOnly)",
+      '"approval_context_changed"',
+      "createManagedTabUnlocked"
+    ])).toBe(true);
   });
 
   it("lets an approved new tab reach that handler without locking the active tab", () => {

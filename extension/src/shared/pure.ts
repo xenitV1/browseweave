@@ -45,6 +45,99 @@ export function canCreateManagedTab(value: unknown): boolean {
 }
 
 /**
+ * Ceiling across every agent sharing one browser profile.
+ *
+ * MAX_MANAGED_TABS is the per-agent allowance, so two agents never compete for
+ * the same slots and neither can starve the other by opening first. This total
+ * still bounds what a runaway loop can do to the browser itself.
+ */
+export const MAX_MANAGED_TABS_TOTAL = 20 as const;
+
+/** One managed tab and the agent that opened it; null is a pre-ownership tab. */
+export interface ManagedTabEntry {
+  readonly id: number;
+  readonly owner: string | null;
+}
+
+/**
+ * An agent identity is minted by the MCP server process, one per client
+ * session. It scopes tabs between cooperating agents; it is not a credential,
+ * because a local process holding the IPC token already has full authority.
+ */
+export function isAgentId(value: unknown): value is string {
+  return typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(value);
+}
+
+/**
+ * Accepts only well-formed entries and drops duplicates, keeping the first
+ * owner seen for an ID. A malformed owner becomes null rather than failing the
+ * whole ledger: the tab is still BrowseWeave's, it just answers to nobody.
+ */
+export function normalizeManagedTabLedger(value: unknown): ManagedTabEntry[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Map<number, string | null>();
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const id = record.id;
+    if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0 || seen.has(id)) continue;
+    seen.set(id, isAgentId(record.owner) ? record.owner : null);
+  }
+  return [...seen.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([id, owner]) => ({ id, owner }));
+}
+
+/** The owner of a managed tab, or undefined when BrowseWeave does not own it. */
+export function managedTabOwner(ledger: unknown, tabId: unknown): string | null | undefined {
+  if (typeof tabId !== "number") return undefined;
+  return normalizeManagedTabLedger(ledger).find((entry) => entry.id === tabId)?.owner;
+}
+
+/**
+ * Whether this agent may act on a managed tab.
+ *
+ * A tab BrowseWeave did not open is not covered here at all: the caller keeps
+ * treating it as an ordinary user tab, which every agent may still use. Only a
+ * managed tab is scoped, and an unowned one answers to no agent, so a ledger
+ * written before ownership existed cannot be driven by whichever agent connects
+ * first.
+ */
+export function agentOwnsManagedTab(ledger: unknown, tabId: unknown, agent: unknown): boolean {
+  if (!isAgentId(agent)) return false;
+  return managedTabOwner(ledger, tabId) === agent;
+}
+
+/** Per-agent allowance first, then the shared ceiling. */
+export function canCreateManagedTabForAgent(ledger: unknown, agent: unknown): boolean {
+  if (!isAgentId(agent)) return false;
+  const entries = normalizeManagedTabLedger(ledger);
+  if (entries.length >= MAX_MANAGED_TABS_TOTAL) return false;
+  return entries.filter((entry) => entry.owner === agent).length < MAX_MANAGED_TABS;
+}
+
+/**
+ * Tabs this agent may close in a cleanup: its own, plus tabs no agent owns.
+ *
+ * Unowned tabs are collectable by anyone on purpose. They cannot be mutated by
+ * anybody, so leaving them out would let them hold the shared ceiling forever
+ * with no way to reclaim the slot.
+ */
+export function selectManagedTabsForAgentCleanup(
+  ledger: unknown,
+  agent: unknown,
+  requested?: unknown
+): number[] {
+  const collectable = normalizeManagedTabLedger(ledger)
+    .filter((entry) => entry.owner === null || (isAgentId(agent) && entry.owner === agent))
+    .map((entry) => entry.id);
+  if (requested === undefined) return collectable;
+  const requestedSet = new Set(normalizeManagedTabIds(requested));
+  return collectable.filter((tabId) => requestedSet.has(tabId));
+}
+
+/**
  * Intersects a cleanup request with the ownership ledger. IDs not created by
  * BrowseWeave are deliberately ignored and therefore can never be closed by
  * bulk cleanup.

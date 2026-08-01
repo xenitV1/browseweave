@@ -87,6 +87,20 @@ function parseResponse(value: unknown, requestId: string): IpcResponse | undefin
   return value as unknown as IpcResponse;
 }
 
+/**
+ * Identity of this client session, minted once per process.
+ *
+ * The MCP server runs one process per client session, so a process-scoped value
+ * is a stable session identity, while the IPC connection is not: callBridge
+ * opens and closes one per request. It travels inside params so the existing
+ * client proof, which covers a hash of params, already authenticates it.
+ *
+ * It scopes managed tabs between cooperating agents. It is not a credential: a
+ * local process holding the IPC token could claim any identity, and it already
+ * had full authority.
+ */
+const CLIENT_ID = randomUUID();
+
 export async function callBridge(
   method: string,
   params: Record<string, unknown> = {},
@@ -99,7 +113,7 @@ export async function callBridge(
   if (!isJsonObject(params) || !isJsonValue(params)) {
     throw new Error("BrowseWeave IPC parameters must be finite JSON values.");
   }
-  const jsonParams = params as JsonObject;
+  const jsonParams = { ...params, client_id: CLIENT_ID } as JsonObject;
   const requestId = randomUUID();
   const clientNonce = randomBytes(32).toString("base64url");
   const endpoint = bridgeIpcEndpoint(env);

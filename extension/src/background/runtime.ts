@@ -1,6 +1,7 @@
 import {
   BRIDGE_URL,
   MAX_MANAGED_TABS,
+  MAX_MANAGED_TABS_TOTAL,
   TOKEN_STORAGE_KEY,
   approvalGuardDecision,
   approvalFingerprint,
@@ -12,6 +13,7 @@ import {
   parseSnapshotCursor,
   mutationIntervalMs,
   compactSubframeUrl,
+  isAgentId,
   normalizeNavigationUrl,
   normalizePagination,
   normalizeScreenshotOptions,
@@ -87,7 +89,10 @@ import {
 } from "./environment";
 import {
   blankManagedTabForNavigation,
+  cleanupEveryManagedTab,
   cleanupManagedTabs,
+  managedTabAccess,
+  managedTabLedger,
   createManagedTab,
   isManagedTab,
   managedTabIdList,
@@ -137,6 +142,8 @@ interface CommandMessage {
   approval_fingerprint?: string;
   approval_source?: ApprovalSource;
   revalidate_only?: boolean;
+  /** Identity of the MCP client session, minted by its server process. */
+  client_id?: unknown;
 }
 
 interface ExtensionErrorPayload {
@@ -1076,13 +1083,17 @@ async function handleCommand(command: CommandMessage, currentSocket: WebSocket, 
       // consumed. A later focus change cannot redirect the approved action.
       if (targetTabId !== undefined) executionPayload = { ...command.payload, tab_id: targetTabId };
     }
+    // An unrecognized identity becomes null rather than an error: the command
+    // still runs, it just owns nothing and may not touch another agent's tabs.
+    const agent = isAgentId(command.client_id) ? command.client_id : null;
     const result = await executeCommandWithGuards(
       command.action,
       executionPayload,
       command.approved,
       suppliedFingerprint,
       command.revalidate_only,
-      approvalSource
+      approvalSource,
+      agent
     );
     response = { type: "result", id: command.id, ok: true, result: result ?? null };
   } catch (error) {
@@ -1320,7 +1331,8 @@ async function executeCommandWithGuards(
   approved: boolean,
   suppliedFingerprint: string,
   revalidateOnly: boolean,
-  approvalSource: ApprovalSource = "session"
+  approvalSource: ApprovalSource = "session",
+  agent: string | null = null
 ): Promise<unknown> {
   if ((approved || revalidateOnly) && !APPROVAL_CONTEXT_ACTIONS.has(action)) {
     throw new BridgeError(
@@ -1340,7 +1352,7 @@ async function executeCommandWithGuards(
   }
 
   if (action === "cleanup_tabs") {
-    return executeCommand(action, payload, approved, suppliedFingerprint, revalidateOnly, approvalSource);
+    return executeCommand(action, payload, approved, suppliedFingerprint, revalidateOnly, approvalSource, agent);
   }
 
   let tab: browser.tabs.Tab | undefined;
@@ -1349,13 +1361,23 @@ async function executeCommandWithGuards(
   } catch (error) {
     if (action !== "new_tab") throw error;
   }
+  // A managed tab belongs to the agent that opened it. Another agent may read
+  // it, because reading changes nothing, but driving it is exactly how two
+  // sessions sharing one browser profile overwrite each other's work. Tabs the
+  // user opened are not managed and stay available to every agent.
+  if (tab && MUTATING_ACTIONS.has(action) && await managedTabAccess(tabId(tab), agent) === "foreign") {
+    throw new BridgeError(
+      "tab_owned_by_another_agent",
+      "Another BrowseWeave agent sharing this browser profile opened that tab. Open your own tab with browser_new_tab, or act on a tab the user opened."
+    );
+  }
   const queueId = tab ? tabId(tab) : -1;
   const lockedPayload = tab && action !== "new_tab" ? { ...payload, tab_id: tabId(tab) } : payload;
   const interval = mutationIntervalMs({ action, key: payload.key, stressed: tabIsStressed(queueId) });
   return runSerializedMutation(queueId, interval, async () => {
     if (tab && DOM_GUARDED_ACTIONS.has(action) && tabOrigin(tab)) await guardHumanIntervention(tab);
     // There is intentionally no automatic retry here. The caller receives the first result.
-    return executeCommand(action, lockedPayload, approved, suppliedFingerprint, revalidateOnly, approvalSource);
+    return executeCommand(action, lockedPayload, approved, suppliedFingerprint, revalidateOnly, approvalSource, agent);
   });
 }
 
@@ -2076,7 +2098,8 @@ async function executeCommand(
   approved: boolean,
   suppliedFingerprint: string,
   revalidateOnly: boolean,
-  approvalSource: ApprovalSource = "session"
+  approvalSource: ApprovalSource = "session",
+  agent: string | null = null
 ): Promise<unknown> {
   if (action === "list_tabs") {
     const tabs = await extensionBrowser.tabs.query({});
@@ -2085,7 +2108,9 @@ async function executeCommand(
     // Ownership and the paused-tab set are what a caller needs to plan with:
     // without them it can only discover the managed-tab budget and a waiting
     // human step by failing into them.
-    const managed = new Set(await managedTabIdList());
+    const ledger = await managedTabLedger();
+    const managed = new Set(ledger.map((entry) => entry.id));
+    const mine = new Set(ledger.filter((entry) => agent !== null && entry.owner === agent).map((entry) => entry.id));
     return {
       tabs: page.map((tab) => ({
         id: tab.id,
@@ -2098,15 +2123,20 @@ async function executeCommand(
         status: tab.status || "unknown",
         title: normalizeText(tab.title || "", 300),
         url: redactUrl(tab.url || ""),
-        managed: typeof tab.id === "number" && managed.has(tab.id)
+        managed: typeof tab.id === "number" && managed.has(tab.id),
+        // A managed tab that is not yours belongs to another agent sharing this
+        // browser profile. Reading it is fine; acting on it is refused.
+        managed_by_you: typeof tab.id === "number" && mine.has(tab.id)
       })),
       total: tabs.length,
       offset: pagination.offset,
       limit: pagination.limit,
       has_more: pagination.offset + page.length < tabs.length,
       next_offset: pagination.offset + page.length < tabs.length ? pagination.offset + page.length : null,
-      managed_tab_count: managed.size,
+      managed_tab_count: mine.size,
       managed_tab_limit: MAX_MANAGED_TABS,
+      managed_tab_total: managed.size,
+      managed_tab_total_limit: MAX_MANAGED_TABS_TOTAL,
       human_intervention_tabs: [...humanInterventions.values()].map((intervention) => ({
         tab_id: intervention.tab_id,
         origin: intervention.origin,
@@ -2240,18 +2270,24 @@ async function executeCommand(
   if (action === "close_tab") {
     const tab = await targetTab(payload);
     const id = tabId(tab);
-    const wasManaged = await isManagedTab(id);
-    if (!wasManaged) {
+    const access = await managedTabAccess(id, agent);
+    if (access === "unmanaged") {
       throw new BridgeError(
         "tab_not_managed",
         "BrowseWeave can close only tabs it created. Close this existing tab manually in the browser."
+      );
+    }
+    if (access === "foreign") {
+      throw new BridgeError(
+        "tab_owned_by_another_agent",
+        "Another BrowseWeave agent sharing this browser profile opened that tab. Close only the tabs you opened; browser_cleanup_tabs already closes just yours."
       );
     }
     await extensionBrowser.tabs.remove(id);
     await untrackManagedTab(id);
     return { tab_id: id, closed: true };
   }
-  if (action === "cleanup_tabs") return cleanupManagedTabs(payload.tab_ids);
+  if (action === "cleanup_tabs") return cleanupManagedTabs(payload.tab_ids, agent);
   if (action === "activate_tab") {
     const tab = await targetTab(payload);
     const updated = await extensionBrowser.tabs.update(tabId(tab), { active: true });
@@ -2268,7 +2304,7 @@ async function executeCommand(
     const needsLiveBinding = externalNavigationRisk(undefined, url, "new_tab") !== null ||
       classifyRisk({ action: "new_tab", url }) !== null;
     if (!needsLiveBinding) {
-      const created = await createManagedTab(url, active, () => guardNavigationRisk(
+      const created = await createManagedTab(url, active, agent, () => guardNavigationRisk(
         "new_tab",
         url,
         approved,
@@ -2285,7 +2321,7 @@ async function executeCommand(
         managed_tab_limit: MAX_MANAGED_TABS
       };
     }
-    const host = await blankManagedTabForNavigation(active, revalidateOnly);
+    const host = await blankManagedTabForNavigation(active, revalidateOnly, agent);
     const hostId = tabId(host);
     await guardNavigationRisk(
       "new_tab",
@@ -2315,11 +2351,15 @@ async function uiStatus(): Promise<Record<string, unknown>> {
   const identity = currentIdentity ?? await browserIdentity().catch(() => null);
   let managedSummary: { managed_tab_count: number; managed_tab_limit: number } = {
     managed_tab_count: managedTabCount(),
-    managed_tab_limit: MAX_MANAGED_TABS
+    managed_tab_limit: MAX_MANAGED_TABS_TOTAL
   };
   let managedTabsError = "";
   try {
-    managedSummary = await managedTabsSummary();
+    const summary = await managedTabsSummary(null);
+    managedSummary = {
+      managed_tab_count: summary.managed_tab_total,
+      managed_tab_limit: summary.managed_tab_total_limit
+    };
   } catch (error) {
     managedTabsError = error instanceof Error ? error.message : "Managed-tab ownership is unavailable.";
   }
@@ -2409,7 +2449,7 @@ extensionBrowser.runtime.onMessage.addListener((message: unknown, sender) => {
   }
   if (record.kind === "ui:cleanup-managed-tabs") {
     if (!fromPopup) return Promise.reject(new Error("Managed tabs can be closed from the BrowseWeave popup only."));
-    return cleanupManagedTabs(undefined);
+    return cleanupEveryManagedTab();
   }
   if (record.kind === "ui:complete-credential-handoff") {
     if (!fromPopup) return Promise.reject(new Error("Local credentials are accepted only from the trusted BrowseWeave popup."));
