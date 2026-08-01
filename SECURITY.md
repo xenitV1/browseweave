@@ -60,6 +60,8 @@ The daemon binds the resulting single-use decision to its approval ID, browser i
 
 The machine's owner can pre-authorize named risk categories in the owner-only `policy.json` (`autonomous_actions`), which replaces the per-action prompt for exactly those categories. This exists because per-action confirmation is unreachable in a client without elicitation, and because an owner watching their own browser may accept the risk knowingly.
 
+That file is `~/.config/browseweave/policy.json`. It does not exist until the owner creates it, and it must be `chmod 600`; the requirements below are enforced, not advisory.
+
 It is a real widening of authority and is treated as such:
 
 - **Off by default, and only the owner can enable it.** The file must be a regular, owner-owned, non-symlinked file with no group or other permission bits, under the private configuration directory. The daemon never writes it, no MCP method or browser command can set it, and page content cannot influence it. It is read at service start, so enabling it requires a deliberate edit plus a restart.

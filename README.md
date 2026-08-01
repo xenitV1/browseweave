@@ -37,6 +37,25 @@ Attaching a file sends it from the computer to a website, so it is off by defaul
 { "file_attach": { "enabled": true, "allowed_directories": ["/absolute/path/to/Documents"] } }
 ```
 
+### Where the policy file lives
+
+Both capabilities read one file, which does not exist until the owner creates it:
+
+```
+~/.config/browseweave/policy.json
+```
+
+Setting `XDG_CONFIG_HOME` moves it to `$XDG_CONFIG_HOME/browseweave/policy.json`; on macOS it is `~/Library/Application Support/BrowseWeave/policy.json`. The file holds a single JSON object whose top-level keys are the sections below, so one file can carry both `file_attach` and `autonomous_actions`. The daemon refuses a policy it cannot trust rather than falling back to a default, so create it readable only by its owner:
+
+```bash
+mkdir -p ~/.config/browseweave
+printf '%s\n' '{ "autonomous_actions": { "enabled": true } }' > ~/.config/browseweave/policy.json
+chmod 600 ~/.config/browseweave/policy.json
+systemctl --user restart browseweave-daemon
+```
+
+A symlink, a file owned by another user, any group or other permission bit, a file over 8 KB, or malformed JSON is rejected with an explanatory error. The daemon reads the file only at service start, so restart it after every edit. `browseweave doctor` prints the exact path it looked at and whether it exists.
+
 ### Uninterrupted operation for a single-owner machine
 
 Per-action confirmation needs an MCP client that supports elicitation. A client without it cannot complete any detected sensitive action, so ordinary work—submitting a form, following a link to another site, publishing a change in a console—stops with "the user did not confirm this action". Owners who drive the browser themselves and watch the agent work may also not want a prompt per click.
