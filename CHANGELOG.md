@@ -6,6 +6,10 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.10] - 2026-08-01
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
 ### Changed
 
 - A snapshot no longer spends its character budget on frames that carry nothing a caller can read. Third-party consent, analytics, and player frames keep their state in the query string — one widget embedded in a search-results page has a 2.4 KB URL — and the budget passes trimmed page elements *before* they trimmed those URLs, so a busy results page could return a frame header for every embed and zero elements for the page itself. An embedded frame's URL is now compacted to its origin and path with a `?[TRIMMED]` marker as soon as it exceeds 200 characters, and a frame reporting no elements, no headings, no landmarks, and zero countable content is left out and counted in a new `empty_frames` field. Measured on three frames captured from one search-results page: 3941 characters down to 454, and the top-level frame's URL is never compacted. `empty_frames` never means there is more to read, so unlike `omitted_frames` it does not drive `next_cursor`.
@@ -164,7 +168,8 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.9...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.10...HEAD
+[0.1.0-beta.10]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.9...v0.1.0-beta.10
 [0.1.0-beta.9]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.8...v0.1.0-beta.9
 [0.1.0-beta.8]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.7...v0.1.0-beta.8
 [0.1.0-beta.7]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.6...v0.1.0-beta.7
