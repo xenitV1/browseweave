@@ -40,8 +40,12 @@ export const BROWSER_ACTIONS = [
 
 export type BrowserAction = (typeof BROWSER_ACTIONS)[number];
 export type BrowserFamily = "firefox" | "chromium";
-/** Sensitive actions are approved only by the human in the MCP client session. */
-export type ApprovalSource = "session";
+/**
+ * Which authority approved a sensitive action: a single-use human decision
+ * relayed by the MCP client, or a risk category the machine's owner
+ * pre-authorized in the owner-only policy file.
+ */
+export type ApprovalSource = "session" | "policy";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -209,11 +213,15 @@ export interface ExtensionUnapprovedCommand extends ExtensionCommandBase {
 }
 
 export interface ExtensionApprovedCommand extends ExtensionCommandBase {
-  /** True only after a matching one-time session decision is consumed. */
+  /**
+   * True only after a matching one-time decision is consumed: a human decision
+   * from the MCP client session, or an owner-policy grant for this exact risk
+   * category. Either way the extension revalidates the live target.
+   */
   approved: true;
   approval_id: string;
   approval_fingerprint: string;
-  approval_source: "session";
+  approval_source: ApprovalSource;
 }
 
 export type ExtensionCommand = ExtensionUnapprovedCommand | ExtensionApprovedCommand;
@@ -333,6 +341,8 @@ export interface BridgeStatus extends JsonObject {
   pending_commands: number;
   pending_approvals: number;
   uptime_seconds: number;
+  /** Risk categories the owner pre-authorized in the owner-only policy file. */
+  autonomous_actions: { enabled: boolean; categories: string[] };
 }
 
 const ACTION_SET: ReadonlySet<string> = new Set(BROWSER_ACTIONS);

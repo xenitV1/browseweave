@@ -6,6 +6,15 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Added an owner-only `autonomous_actions` policy section that pre-authorizes named sensitive-action risk categories, so detected clicks, submissions, publications, and cross-site navigations execute without a per-action prompt. It is off by default and lives in the same owner-only `policy.json` as the file-attach allowlist: the daemon never writes it, no MCP method or browser command can set it, and it is read at service start. `{ "autonomous_actions": { "enabled": true } }` covers every page-action category, an explicit `categories` array narrows it, and `file_attach` is covered only when named. The live-target fingerprint check, single-use grants, automatic-replay bounds, credential handoff, path allowlist, and refused browser surfaces are unchanged; grants are audited as `policy_approved` and reported by `browser_status` and `doctor`.
+- `browseweave doctor` now reports the owner policy file path and whether it exists.
+
+### Fixed
+
+- A detected sensitive action in an MCP client without elicitation support now reports that the client cannot collect a confirmation, instead of reporting that the user declined. The message names the owner-policy opt-in so the failure is actionable rather than a silent dead end.
+
 ## [0.1.0-beta.6] - 2026-07-29
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.

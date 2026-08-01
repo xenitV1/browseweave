@@ -72,16 +72,22 @@ function parseBrowser(value: unknown): SetupBrowserStatus {
   };
 }
 
+function isAutonomousActionsSummary(value: unknown): boolean {
+  return isRecord(value) && hasExactKeys(value, ["enabled", "categories"])
+    && typeof value.enabled === "boolean" && Array.isArray(value.categories)
+    && value.categories.every((category) => boundedLabel(category, 40));
+}
+
 export function parseSetupDaemonStatus(value: unknown): SetupBrowserStatus[] {
   if (!isRecord(value) || !hasExactKeys(value, [
     "service", "protocol_version", "websocket_listening", "connected_browsers",
-    "pending_commands", "pending_approvals", "uptime_seconds"
+    "pending_commands", "pending_approvals", "uptime_seconds", "autonomous_actions"
   ]) || value.service !== "browseweave" || value.protocol_version !== PROTOCOL_VERSION
     || value.websocket_listening !== true || !Array.isArray(value.connected_browsers)
     || !Number.isInteger(value.pending_commands) || (value.pending_commands as number) < 0
     || !Number.isInteger(value.pending_approvals) || (value.pending_approvals as number) < 0
     || typeof value.uptime_seconds !== "number" || !Number.isFinite(value.uptime_seconds)
-    || value.uptime_seconds < 0) {
+    || value.uptime_seconds < 0 || !isAutonomousActionsSummary(value.autonomous_actions)) {
     throw new Error("BrowseWeave returned an invalid or unhealthy setup status.");
   }
   const browsers = value.connected_browsers.map(parseBrowser);

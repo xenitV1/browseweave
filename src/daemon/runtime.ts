@@ -91,6 +91,13 @@ import {
   type StoredExtensionKey
 } from "./key-registry.js";
 import {
+  DISABLED_AUTONOMY_POLICY,
+  autonomyPolicySummary,
+  isAutonomousCategory,
+  loadAutonomyPolicy,
+  type AutonomyPolicy
+} from "./autonomy.js";
+import {
   DISABLED_FILE_ATTACH_POLICY,
   FileAttachError,
   attachedFileFacts,
@@ -115,6 +122,8 @@ const SAFE_CLOSE_REASON = "policy violation";
 const ATTACH_FILE_COMMAND_CEILING_BYTES = 12 * 1024 * 1024;
 const IPC_ENVELOPE_OVERHEAD_BYTES = 16 * 1024;
 const MAX_IPC_HELLO_BYTES = 4 * 1024;
+/** Bounds automatic policy replays when a page keeps changing its live target. */
+const MAX_POLICY_APPROVALS_PER_REQUEST = 2;
 const SETUP_SECRET_PATTERN = /^[a-f0-9]{64}$/u;
 
 interface PendingCommand {
@@ -129,6 +138,8 @@ interface PendingCommand {
   revalidatingApprovalId?: string;
   approvedGrantId?: string;
   approvalFingerprint?: string;
+  /** How many owner-policy grants this one IPC request already consumed. */
+  policyApprovals: number;
   startedAt: number;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -227,6 +238,8 @@ export interface DaemonStatusSnapshot {
   pendingCommands: number;
   pendingApprovals: number;
   uptimeSeconds: number;
+  /** Risk categories the owner pre-authorized in the owner-only policy file. */
+  autonomousActions: { enabled: boolean; categories: string[] };
   lastAuditError?: string;
 }
 
@@ -356,6 +369,7 @@ export class BrowseWeaveDaemon {
   readonly #pendingCommands = new Map<string, PendingCommand>();
   readonly #pendingApprovals = new Map<string, PendingApproval>();
   #fileAttachPolicy: FileAttachPolicy = DISABLED_FILE_ATTACH_POLICY;
+  #autonomyPolicy: AutonomyPolicy = DISABLED_AUTONOMY_POLICY;
   #setupPairingSession: SetupPairingSession | undefined;
   #legacyPairingSession: LegacyPairingSession | undefined;
   #wsServer: WebSocketServer | undefined;
@@ -382,6 +396,7 @@ export class BrowseWeaveDaemon {
     await ensurePrivateDirectory(this.#config.stateDir);
     await this.#keyRegistry.load();
     this.#fileAttachPolicy = await loadFileAttachPolicy(this.#config.configDir);
+    this.#autonomyPolicy = await loadAutonomyPolicy(this.#config.configDir);
     this.#startedAt = Date.now();
     try {
       await this.#audit.start();
@@ -415,7 +430,8 @@ export class BrowseWeaveDaemon {
       connectedBrowsers: this.#connectedBrowserSummaries(),
       pendingCommands: this.#pendingCommands.size,
       pendingApprovals: this.#pendingApprovals.size,
-      uptimeSeconds: this.#startedAt === 0 ? 0 : Math.max(0, (Date.now() - this.#startedAt) / 1000)
+      uptimeSeconds: this.#startedAt === 0 ? 0 : Math.max(0, (Date.now() - this.#startedAt) / 1000),
+      autonomousActions: autonomyPolicySummary(this.#autonomyPolicy)
     };
     if (this.#audit.lastError !== undefined) snapshot.lastAuditError = this.#audit.lastError;
     return snapshot;
@@ -1345,7 +1361,8 @@ export class BrowseWeaveDaemon {
         connected_browsers: status.connectedBrowsers,
         pending_commands: status.pendingCommands,
         pending_approvals: status.pendingApprovals,
-        uptime_seconds: Math.round(status.uptimeSeconds * 1000) / 1000
+        uptime_seconds: Math.round(status.uptimeSeconds * 1000) / 1000,
+        autonomous_actions: status.autonomousActions
       };
       this.#writeSuccess(socket, request.id, result);
       return;
@@ -1656,7 +1673,8 @@ export class BrowseWeaveDaemon {
     revalidateOnly = false,
     revalidatingApprovalId?: string,
     approvedGrantId?: string,
-    approvalSource?: ApprovalSource
+    approvalSource?: ApprovalSource,
+    policyApprovals = 0
   ): void {
     if (session.socket.readyState !== WebSocket.OPEN) {
       if (approvedGrantId !== undefined) {
@@ -1759,6 +1777,7 @@ export class BrowseWeaveDaemon {
       params,
       approved,
       revalidateOnly,
+      policyApprovals,
       startedAt,
       timer
     };
@@ -1915,7 +1934,8 @@ export class BrowseWeaveDaemon {
             false,
             undefined,
             consumedGrant.approvalId,
-            consumedGrant.approvalSource
+            consumedGrant.approvalSource,
+            pending.policyApprovals
           );
           return;
         }
@@ -2004,10 +2024,6 @@ export class BrowseWeaveDaemon {
     error: ExtensionError,
     fingerprint: string
   ): void {
-    if (this.#pendingApprovals.size >= this.#config.maxPendingApprovals) {
-      this.#writeFailure(pending.client, pending.requestId, "BrowseWeave reached its pending-approval limit.");
-      return;
-    }
     if (
       typeof error.target_tab_id !== "number" || !Number.isSafeInteger(error.target_tab_id) || error.target_tab_id <= 0 ||
       typeof error.target_frame_id !== "number" || !Number.isSafeInteger(error.target_frame_id) || error.target_frame_id < 0
@@ -2023,6 +2039,11 @@ export class BrowseWeaveDaemon {
         outcome: "failed",
         code: "invalid_approval_target"
       });
+      return;
+    }
+    if (this.#grantFromPolicy(session, pending, error, fingerprint)) return;
+    if (this.#pendingApprovals.size >= this.#config.maxPendingApprovals) {
+      this.#writeFailure(pending.client, pending.requestId, "BrowseWeave reached its pending-approval limit.");
       return;
     }
     const approvalId = randomUUID();
@@ -2049,6 +2070,61 @@ export class BrowseWeaveDaemon {
     this.#pendingApprovals.set(approvalId, approval);
     this.#writeApprovalRequired(pending.client, pending.requestId, approval);
     this.#audit.record({ event: "command", action: pending.action, outcome: "approval_required", code: "approval_required" });
+  }
+
+  /**
+   * Executes a detected sensitive action on the authority of the owner's
+   * policy instead of a per-action human decision.
+   *
+   * The grant is minted and consumed in the same step, bound to the exact
+   * live-target fingerprint the extension just reported for these exact
+   * parameters. The extension still recomputes that fingerprint before it acts,
+   * so a page that changes in the meantime invalidates the grant exactly as it
+   * invalidates a human decision. Only the human prompt is skipped, never the
+   * live-target check.
+   *
+   * Returns true when the command was re-routed as approved.
+   */
+  #grantFromPolicy(
+    session: BrowserSession,
+    pending: PendingCommand,
+    error: ExtensionError,
+    fingerprint: string
+  ): boolean {
+    // A revalidation is observational by contract and must never execute.
+    if (pending.revalidateOnly) return false;
+    if (!isAutonomousCategory(this.#autonomyPolicy, error.category)) return false;
+    // A page that keeps changing its live target must not loop the daemon
+    // through unbounded automatic replays.
+    if (pending.policyApprovals >= MAX_POLICY_APPROVALS_PER_REQUEST) {
+      this.#audit.record({
+        event: "approval",
+        action: pending.action,
+        outcome: "policy_replay_limit"
+      });
+      return false;
+    }
+    this.#audit.record({
+      event: "approval",
+      action: pending.action,
+      outcome: "policy_approved",
+      code: "autonomous_actions_policy"
+    });
+    this.#routeCommand(
+      pending.client,
+      pending.requestId,
+      session,
+      pending.action,
+      pending.params,
+      true,
+      fingerprint,
+      false,
+      undefined,
+      randomUUID(),
+      "policy",
+      pending.policyApprovals + 1
+    );
+    return true;
   }
 
   #writeApprovalRequired(client: Socket, requestId: string, approval: PendingApproval): void {
@@ -2294,6 +2370,14 @@ export async function main(): Promise<void> {
     `BrowseWeave is ready: ws://${addresses.websocketHost}:${addresses.websocketPort}, ` +
     `tcp://${addresses.ipcHost}:${addresses.ipcPort}`
   );
+  const autonomy = daemon.statusSnapshot().autonomousActions;
+  if (autonomy.enabled) {
+    console.error(
+      "BrowseWeave autonomous_actions policy is ON. These detected risk categories execute without asking " +
+      `the user first: ${autonomy.categories.join(", ")}. Remove the section from policy.json to restore ` +
+      "per-action confirmation."
+    );
+  }
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;

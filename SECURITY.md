@@ -52,9 +52,25 @@ When the extension's conservative risk checks detect one of the following classe
 - account access, privacy, or security-setting changes;
 - risky form submission and every semantic-free coordinate click.
 
-The extension does not display or sign approve/reject decisions. The human confirms or rejects the exact action in the MCP client session. There is no secondary extension toggle, policy opt-in, or generated phrase. This makes the trust assumption explicit: **BrowseWeave trusts the MCP client to relay the human's decision honestly and not answer confirmation requests on the user's behalf.** A client without MCP elicitation support cannot complete a detected sensitive action.
+The extension does not display or sign approve/reject decisions, and there is no in-browser toggle or generated phrase. By default the human confirms or rejects the exact action in the MCP client session. This makes the trust assumption explicit: **BrowseWeave trusts the MCP client to relay the human's decision honestly and not answer confirmation requests on the user's behalf.** A client without MCP elicitation support cannot complete a detected sensitive action through this channel.
 
 The daemon binds the resulting single-use decision to its approval ID, browser installation, action, canonical parameter hash, live document/target fingerprint, and expiry. A retry first re-evaluates the live target without executing it. Only an exact fingerprint match consumes the decision and sends one approved command. The extension keeps a bounded replay ledger for session decision IDs. A decision is single-use even if command delivery later fails.
+
+### Owner-declared autonomous categories
+
+The machine's owner can pre-authorize named risk categories in the owner-only `policy.json` (`autonomous_actions`), which replaces the per-action prompt for exactly those categories. This exists because per-action confirmation is unreachable in a client without elicitation, and because an owner watching their own browser may accept the risk knowingly.
+
+It is a real widening of authority and is treated as such:
+
+- **Off by default, and only the owner can enable it.** The file must be a regular, owner-owned, non-symlinked file with no group or other permission bits, under the private configuration directory. The daemon never writes it, no MCP method or browser command can set it, and page content cannot influence it. It is read at service start, so enabling it requires a deliberate edit plus a restart.
+- **The live-target check is not skipped.** A policy grant is minted for one action, one canonical parameter set, and the exact live-target fingerprint the extension just reported, then consumed immediately. The extension recomputes that fingerprint before acting; a page, tab, target, or parameter change invalidates it. Automatic replays after a changed fingerprint are bounded, so a page that keeps mutating cannot loop the daemon.
+- **Observational rechecks never execute.** A revalidation-only command is never satisfied by the policy.
+- **Unknown categories are never covered.** An absent or unrecognized category still requires a human decision, so a future risk class cannot inherit an older policy.
+- **`file_attach` is excluded by default** and is covered only when the owner names it explicitly.
+- **Everything else still applies.** Credential, one-time-code, and payment-card entry keeps using the dedicated handoff instead of ordinary commands; refused browser surfaces, file-picker and declared-download blocks, per-tab serialization, managed-tab limits, and untrusted-page-content handling are unchanged.
+- **It is auditable.** Grants are recorded as `policy_approved` (bounded replays as `policy_replay_limit`), the enabled categories are logged at service start, and both `browser_status` and `browseweave doctor` report them.
+
+With this enabled, an injected page instruction that reaches the model can cause a submission, publication, deletion, or cross-site navigation without a second human checkpoint. The remaining defenses are the live-target binding, the untrusted-content rules, the audit log, and the owner watching the session.
 
 For clicks and submissions, the displayed destination is the browser-verified **current pre-action destination**. BrowseWeave rechecks it after focus and synthetic pre-click events and immediately before the native action. Page JavaScript running during the native event/default-action boundary, server behavior, or a later redirect can still change the eventual destination; the approval is not a guarantee of the final network destination.
 
@@ -64,7 +80,7 @@ Risk detection is a defense layer, not a complete understanding of every site. C
 
 File attachment is the only capability that reads something outside a web page, so it is a genuinely new class of reach for BrowseWeave: without controls it would be a local-file exfiltration primitive, where an injected instruction could upload a private file to a hostile origin. It is **off by default**.
 
-Attachment uses the same MCP-session confirmation path, while the path policy independently limits which local files can even reach that prompt:
+Attachment uses the same MCP-session confirmation path—`autonomous_actions` excludes `file_attach` unless the owner names that category explicitly—while the path policy independently limits which local files can even reach that prompt:
 
 - **Default deny.** With no `policy.json`, nothing is attachable. Enabling it requires listing absolute directories in an owner-only file that no MCP tool can write.
 - **Refused even inside an allowed directory:** any hidden path segment, which covers `.ssh`, `.gnupg`, `.aws`, `.env`, and `.npmrc`; multiple-hardlink aliases; known credential filenames and key formats; recognizable private-key content; unsupported file types; and BrowseWeave's own configuration, state, and runtime directories. A renamed or archived secret cannot be identified perfectly, which is why exact-file confirmation is still mandatory.

@@ -61,6 +61,7 @@ import {
   type SetupBrowserStatus
 } from "../bridge/setup-status.js";
 import { APP_VERSION } from "../core/version.js";
+import { policyPath } from "../daemon/policy.js";
 import {
   assertTrustedClientExecutableUnchanged,
   resolveTrustedClientExecutable,
@@ -1191,6 +1192,14 @@ async function doctor(): Promise<void> {
     checks.push({ check: "ipc_authentication", ok: true });
   } catch {
     checks.push({ check: "ipc_authentication", ok: false });
+  }
+  const policyFile = policyPath(paths.configDir);
+  try {
+    await access(policyFile);
+    checks.push({ check: "owner_policy_file", ok: true, path: policyFile });
+  } catch {
+    // Absent is the safe default, so this is reported rather than failed.
+    checks.push({ check: "owner_policy_file", ok: false, path: policyFile });
   }
   try {
     const status = await callBridge("status", {}, 5_000);

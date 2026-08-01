@@ -25,7 +25,8 @@ function daemonStatus() {
     connected_browsers: [browser],
     pending_commands: 0,
     pending_approvals: 0,
-    uptime_seconds: 1.5
+    uptime_seconds: 1.5,
+    autonomous_actions: { enabled: false, categories: [] as string[] }
   };
 }
 
@@ -37,6 +38,19 @@ describe("exact one-click setup status", () => {
     expect(() => parseSetupDaemonStatus({
       ...daemonStatus(), connected_browsers: [{ ...browser, extra: true }]
     })).toThrow(/invalid connected-browser/iu);
+    expect(parseSetupDaemonStatus({
+      ...daemonStatus(), autonomous_actions: { enabled: true, categories: ["form_submit", "message"] }
+    })).toEqual([browser]);
+    for (const autonomous of [
+      undefined,
+      { enabled: true },
+      { enabled: "yes", categories: [] },
+      { enabled: true, categories: [""] },
+      { enabled: true, categories: ["form_submit"], extra: true }
+    ]) {
+      expect(() => parseSetupDaemonStatus({ ...daemonStatus(), autonomous_actions: autonomous }))
+        .toThrow(/invalid or unhealthy/iu);
+    }
   });
 
   it("binds completion to the exact setup and connected browser", () => {

@@ -2172,6 +2172,181 @@ describe("BrowseWeave daemon integration", () => {
 
 });
 
+describe("owner-declared autonomous actions", () => {
+  const FINGERPRINT_C = `sha256:${"c".repeat(64)}`;
+
+  async function rootWithPolicy(section: Record<string, unknown>): Promise<string> {
+    const root = await mkdtemp(path.join(tmpdir(), "browseweave-daemon-"));
+    await mkdir(path.join(root, "config"), { recursive: true, mode: 0o700 });
+    await writeFile(path.join(root, "config", "policy.json"), JSON.stringify(section), { mode: 0o600 });
+    return root;
+  }
+
+  it("executes a pre-authorized category against the live fingerprint without any session prompt", async () => {
+    const root = await rootWithPolicy({ autonomous_actions: { enabled: true, categories: ["form_submit"] } });
+    const harness = await startHarness({}, root);
+    expect(await ipcCall(harness, "status")).toMatchObject({
+      ok: true,
+      result: { autonomous_actions: { enabled: true, categories: ["form_submit"] } }
+    });
+    const extension = await connectExtension(
+      harness,
+      makeSigningIdentity("a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1")
+    );
+    const params = { browser_id: extension.browserId, tab_id: 11, frame_id: 0, ref: "bw-30" };
+
+    const call = ipcCall(harness, "click", params);
+    const probe = await extension.next("command");
+    expect(probe).toMatchObject({ approved: false, revalidate_only: false });
+    extension.socket.send(commandFailure(probe, FINGERPRINT_A, UNTRUSTED_LABEL, "form_submit"));
+
+    const approved = await extension.next("command");
+    expect(approved).toMatchObject({
+      approved: true,
+      approval_fingerprint: FINGERPRINT_A,
+      approval_source: "policy",
+      revalidate_only: false,
+      payload: { tab_id: 11, frame_id: 0, ref: "bw-30" }
+    });
+    extension.socket.send(JSON.stringify({
+      type: "result",
+      id: approved.id,
+      ok: true,
+      result: { clicked: true }
+    }));
+    expect(await call).toMatchObject({ ok: true, result: { clicked: true } });
+    expect(await ipcCall(harness, "status")).toMatchObject({ ok: true, result: { pending_approvals: 0 } });
+
+    await harness.daemon.stop("policy_approval_audit_flush");
+    const audit = await readFile(harness.config.auditLogPath, "utf8");
+    expect(audit).toContain("policy_approved");
+    expect(audit).not.toContain("session_approved");
+    expect(audit).not.toContain(UNTRUSTED_LABEL);
+  });
+
+  it("still pauses a risk category the owner did not name", async () => {
+    const root = await rootWithPolicy({ autonomous_actions: { enabled: true, categories: ["form_submit"] } });
+    const harness = await startHarness({}, root);
+    const extension = await connectExtension(
+      harness,
+      makeSigningIdentity("a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2")
+    );
+    const params = { browser_id: extension.browserId, tab_id: 12, frame_id: 0, ref: "bw-31" };
+
+    const call = ipcCall(harness, "click", params);
+    const probe = await extension.next("command");
+    extension.socket.send(commandFailure(probe, FINGERPRINT_A, UNTRUSTED_LABEL, "delete"));
+    expect(await call).toMatchObject({
+      ok: true,
+      result: { approval_required: true, approval_ui: "mcp_session", risk: "delete" }
+    });
+    await expect(extension.next("command", 100)).rejects.toThrow(/Timed out/u);
+  });
+
+  it("never executes an approval-only recheck on the authority of the policy", async () => {
+    const root = await rootWithPolicy({ autonomous_actions: { enabled: true, categories: ["form_submit"] } });
+    const harness = await startHarness({}, root);
+    const extension = await connectExtension(
+      harness,
+      makeSigningIdentity("a3a3a3a3-a3a3-4a3a-8a3a-a3a3a3a3a3a3")
+    );
+    const params = { browser_id: extension.browserId, tab_id: 13, frame_id: 0, ref: "bw-32" };
+
+    // A session decision for an uncovered category leaves an approved grant, so
+    // the retry is an observational recheck. Even when the live target now
+    // reports a policy-covered category, the recheck must not execute.
+    const first = ipcCall(harness, "click", params);
+    const probe = await extension.next("command");
+    extension.socket.send(commandFailure(probe, FINGERPRINT_A, UNTRUSTED_LABEL, "delete"));
+    const required = await first;
+    const requiredResult = isJsonObjectForTest(required.result) ? required.result : {};
+    const approvalId = String(requiredResult.approval_id ?? "");
+    expect(approvalId).not.toBe("");
+    expect(await ipcCall(harness, "session_approval_submit", {
+      approval_id: approvalId,
+      decision: "approve"
+    })).toMatchObject({ ok: true, result: { decision: "approve" } });
+
+    const retry = ipcCall(harness, "click", params);
+    const recheck = await extension.next("command");
+    expect(recheck).toMatchObject({ approved: false, revalidate_only: true });
+    extension.socket.send(commandFailure(recheck, FINGERPRINT_B, UNTRUSTED_LABEL, "form_submit"));
+    expect(await retry).toMatchObject({ ok: true, result: { approval_required: true } });
+    await expect(extension.next("command", 100)).rejects.toThrow(/Timed out/u);
+  });
+
+  it("bounds automatic replays when the live target keeps changing", async () => {
+    const root = await rootWithPolicy({ autonomous_actions: { enabled: true } });
+    const harness = await startHarness({}, root);
+    const extension = await connectExtension(
+      harness,
+      makeSigningIdentity("a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4")
+    );
+    const params = { browser_id: extension.browserId, tab_id: 14, frame_id: 0, ref: "bw-34" };
+
+    const call = ipcCall(harness, "click", params);
+    const probe = await extension.next("command");
+    extension.socket.send(commandFailure(probe, FINGERPRINT_A, UNTRUSTED_LABEL, "message"));
+    const firstGrant = await extension.next("command");
+    expect(firstGrant).toMatchObject({ approved: true, approval_fingerprint: FINGERPRINT_A });
+    extension.socket.send(commandFailure(firstGrant, FINGERPRINT_B, UNTRUSTED_LABEL, "message"));
+    const secondGrant = await extension.next("command");
+    expect(secondGrant).toMatchObject({ approved: true, approval_fingerprint: FINGERPRINT_B });
+    extension.socket.send(commandFailure(secondGrant, FINGERPRINT_C, UNTRUSTED_LABEL, "message"));
+
+    expect(await call).toMatchObject({ ok: true, result: { approval_required: true } });
+    await expect(extension.next("command", 100)).rejects.toThrow(/Timed out/u);
+    await harness.daemon.stop("policy_replay_audit_flush");
+    expect(await readFile(harness.config.auditLogPath, "utf8")).toContain("policy_replay_limit");
+  });
+
+  it("keeps file attachment behind exact-file confirmation unless the owner names it", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "browseweave-daemon-"));
+    const documents = path.join(root, "documents");
+    await mkdir(documents, { recursive: true });
+    await mkdir(path.join(root, "config"), { recursive: true, mode: 0o700 });
+    await writeFile(
+      path.join(root, "config", "policy.json"),
+      JSON.stringify({
+        file_attach: { enabled: true, allowed_directories: [documents] },
+        autonomous_actions: { enabled: true }
+      }),
+      { mode: 0o600 }
+    );
+    const attachment = path.join(documents, "report.txt");
+    await writeFile(attachment, "quarterly numbers");
+
+    const harness = await startHarness({}, root);
+    expect(await ipcCall(harness, "status")).toMatchObject({
+      ok: true,
+      result: { autonomous_actions: { enabled: true } }
+    });
+    const status = await ipcCall(harness, "status");
+    const statusResult = isJsonObjectForTest(status.result) ? status.result : {};
+    const autonomous = isJsonObjectForTest(statusResult.autonomous_actions) ? statusResult.autonomous_actions : {};
+    expect(autonomous.categories).not.toContain("file_attach");
+
+    const extension = await connectExtension(
+      harness,
+      makeSigningIdentity("a5a5a5a5-a5a5-4a5a-8a5a-a5a5a5a5a5a5")
+    );
+    const call = ipcCall(harness, "attach_file", {
+      browser_id: extension.browserId,
+      tab_id: 15,
+      frame_id: 0,
+      ref: "bw-35",
+      path: attachment
+    });
+    const probe = await extension.next("command");
+    extension.socket.send(commandFailure(probe, FINGERPRINT_A, UNTRUSTED_LABEL, "file_attach"));
+    expect(await call).toMatchObject({
+      ok: true,
+      result: { approval_required: true, approval_ui: "mcp_session", risk: "file_attach" }
+    });
+    await expect(extension.next("command", 100)).rejects.toThrow(/Timed out/u);
+  });
+});
+
 function isJsonObjectForTest(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

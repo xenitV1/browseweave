@@ -136,6 +136,11 @@ function imageDimensions(data: string, mimeType: string): { image_width: number;
 
 const SESSION_APPROVAL_DECLINED =
   "The user did not confirm this action, so nothing was executed. Do not retry it without a new instruction.";
+const SESSION_APPROVAL_UNAVAILABLE =
+  "This MCP client cannot ask the user to confirm a sensitive action, so nothing was executed. " +
+  "Report this to the user instead of retrying: they can pre-authorize risk categories themselves by " +
+  "enabling the autonomous_actions section of the owner-only BrowseWeave policy.json, then restarting the " +
+  "BrowseWeave service.";
 
 function approvalRequiring(value: unknown): JsonRecord | undefined {
   const record = asRecord(value);
@@ -146,9 +151,11 @@ function approvalRequiring(value: unknown): JsonRecord | undefined {
     : undefined;
 }
 
+type SessionDecision = "approved" | "rejected" | "unavailable";
+
 /** Asks the human to approve or reject the exact action in the MCP client. */
-async function confirmInSession(approval: JsonRecord): Promise<boolean> {
-  if (!server.server.getClientCapabilities()?.elicitation) return false;
+async function confirmInSession(approval: JsonRecord): Promise<SessionDecision> {
+  if (!server.server.getClientCapabilities()?.elicitation) return "unavailable";
   const confirmation = asRecord(await callBridge("session_approval_begin", { approval_id: approval.approval_id }));
   const file = asRecord(confirmation.file);
   const fileDetails = typeof file.name === "string"
@@ -196,26 +203,32 @@ async function confirmInSession(approval: JsonRecord): Promise<boolean> {
     approval_id: approval.approval_id,
     decision
   });
-  return decision === "approve";
+  return decision === "approve" ? "approved" : "rejected";
 }
 
 /**
  * Runs an action and, when the browser-side risk checks pause it, obtains the
  * human's decision in the MCP client and retries exactly once. The retry
  * re-enters the daemon's normal path and revalidates the live target first.
+ *
+ * A category the owner pre-authorized in `policy.json` never reaches this
+ * pause: the daemon executes it directly after its own live-target check.
  */
 async function invokeAction(method: string, params: JsonRecord): Promise<unknown> {
   const first = await callBridge(method, params);
   const approval = approvalRequiring(first);
   if (approval === undefined) return first;
+  let decision: SessionDecision;
   try {
-    if (!await confirmInSession(approval)) return { ...approval, session_approval: SESSION_APPROVAL_DECLINED };
+    decision = await confirmInSession(approval);
   } catch {
     return {
       ...approval,
       session_approval: "The MCP client could not collect the user's confirmation. Nothing was executed."
     };
   }
+  if (decision === "rejected") return { ...approval, session_approval: SESSION_APPROVAL_DECLINED };
+  if (decision === "unavailable") return { ...approval, session_approval: SESSION_APPROVAL_UNAVAILABLE };
   return await callBridge(method, params);
 }
 

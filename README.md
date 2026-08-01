@@ -26,7 +26,7 @@ The MCP transport is client-neutral. Automatic configuration is currently implem
 - Click, double-click, hover, type, fill forms, press keys, scroll, and wait for page state.
 - Capture the visible viewport when layout, images, canvas, or an ambiguous state matters.
 - Use short-lived screenshot-bound coordinates for custom widgets that have no semantic reference.
-- Heuristically detect supported sensitive-action patterns—such as messages, publishing, payments, deletion, credentials, 2FA, and security changes—and pause detected actions for confirmation in the MCP client session.
+- Heuristically detect supported sensitive-action patterns—such as messages, publishing, payments, deletion, credentials, 2FA, and security changes—and pause detected actions for confirmation in the MCP client session, unless the machine's owner pre-authorized that risk category in `policy.json`.
 - Attach a local file to a page's file input, if the user has allowed its directory, without opening the operating-system file picker.
 - Connect more than one browser profile without mixing their tab IDs or decision contexts.
 
@@ -35,6 +35,33 @@ Attaching a file sends it from the computer to a website, so it is off by defaul
 ```json
 { "file_attach": { "enabled": true, "allowed_directories": ["/absolute/path/to/Documents"] } }
 ```
+
+### Uninterrupted operation for a single-owner machine
+
+Per-action confirmation needs an MCP client that supports elicitation. A client without it cannot complete any detected sensitive action, so ordinary work—submitting a form, following a link to another site, publishing a change in a console—stops with "the user did not confirm this action". Owners who drive the browser themselves and watch the agent work may also not want a prompt per click.
+
+The same owner-only `policy.json` can therefore pre-authorize whole risk categories. It is off by default, the daemon never writes it, an MCP caller cannot set it, and page content cannot reach it—changing it is always a deliberate human edit followed by a service restart.
+
+```json
+{ "autonomous_actions": { "enabled": true } }
+```
+
+That covers every detected page-action category: `form_submit`, `message`, `external_navigation`, `visual_click`, `delete`, `payment`, `security`, `password`, and `2fa`. Name a subset to keep the rest behind confirmation:
+
+```json
+{ "autonomous_actions": { "enabled": true, "categories": ["form_submit", "message", "external_navigation"] } }
+```
+
+`file_attach` is never included by default because attaching sends a local file from the computer to a website; it is covered only when the owner lists it explicitly.
+
+What the policy does **not** change:
+
+- The live-target check still runs. The extension recomputes the target fingerprint and executes only if the page, tab, target, and parameters still match what it just reported; a page that changed invalidates the grant exactly as it invalidates a human decision.
+- Every grant is still single-use and audited, with `policy_approved` in the audit log instead of `session_approved`.
+- The path allowlist, credential handoff, refused surfaces, file-picker and download blocks, managed-tab limits, and untrusted-page-content rules are untouched. Passwords, one-time codes, and payment-card values still cannot be typed through ordinary commands.
+- An unrecognized or absent risk category is never covered, so a future risk class keeps waiting for a human decision instead of inheriting an older policy.
+
+`npx browseweave@0.1.0-beta.6 doctor` reports the policy file path and the categories the running daemon actually loaded. The service also logs the enabled categories at startup. Enabling this is a deliberate trade: the agent will submit, publish, delete, and navigate away without asking first, so keep it to machines and sessions where that is what the owner wants.
 
 BrowseWeave controls permitted content inside ordinary HTTP(S) pages. It does not control browser menus, browser settings pages, extension-store pages, operating-system dialogs, file pickers, hardware security-key dialogs, or other privileged surfaces.
 
@@ -70,6 +97,7 @@ Codex / Claude Code / Cursor / OpenCode / another MCP client
              └──── permitted web pages ────┘
 
 Detected sensitive action ──► MCP client confirmation ──► single-use decision
+                        └──► owner policy pre-authorization ──► single-use grant
 
 Trusted Connect click ──► browser native messaging ──► registered setup helper
                     └──── authenticated local IPC ────► daemon
@@ -304,7 +332,7 @@ Only when the user explicitly wants those local application directories deleted,
 
 ## Human approval and site-respectful operation
 
-Sensitive-action approval happens only in the MCP client session. The extension does not show approve/reject cards and there is no approval toggle or confirmation phrase. When BrowseWeave detects a supported risk pattern, the MCP client presents the action, risk, page-derived details, browser tab, and—when relevant—the exact local-file identity. The human's approve/reject decision is accepted as the authority for that one action.
+Sensitive-action approval happens in the MCP client session or, for risk categories the machine's owner pre-authorized in `policy.json`, on the authority of that file. The extension never shows approve/reject cards and there is no in-browser toggle or confirmation phrase. When BrowseWeave detects a supported risk pattern in a category that is not pre-authorized, the MCP client presents the action, risk, page-derived details, browser tab, and—when relevant—the exact local-file identity. The human's approve/reject decision is accepted as the authority for that one action.
 
 This deliberately trusts the MCP client to relay the human's decision honestly. The decision is short-lived and single-use. A retry re-evaluates the live target before execution; if the page, target, tab, parameters, file bytes, or live target fingerprint changed, the decision is invalid and a fresh confirmation is required. Page JavaScript, server behavior, or a later redirect can still change the final destination. The heuristics can also produce false positives and false negatives, so this is not a complete safety guarantee. Read [SECURITY.md](SECURITY.md#human-approval) for the exact trust boundary.
 
