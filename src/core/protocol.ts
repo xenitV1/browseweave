@@ -16,6 +16,7 @@ export const MAX_EXTENSION_INCOMING_MESSAGE_BYTES = 12 * 1024 * 1024;
 export const BROWSER_ACTIONS = [
   "list_tabs",
   "snapshot",
+  "collect",
   "screenshot",
   "wait",
   "hover",

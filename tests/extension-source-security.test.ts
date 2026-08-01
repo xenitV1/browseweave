@@ -26,6 +26,34 @@ describe("extension security structure", () => {
     expect(ordered(closeCase, ["isManagedTab(id)", '"tab_not_managed"', "tabs.remove(id)", "untrackManagedTab(id)"])).toBe(true);
   });
 
+  it("guards every tab of a multi-tab read and reports the ones it could not read", () => {
+    const collectBody = background.slice(
+      background.indexOf("async function collect("),
+      background.indexOf("async function guardNavigationRisk(")
+    );
+    // Each tab is checked on its own, and a tab that cannot be read becomes a
+    // reported entry rather than a failure of the whole batch.
+    expect(ordered(collectBody, [
+      "tabs.get(id)",
+      "tab.discarded",
+      "guardHumanIntervention(tab)",
+      "await snapshot(",
+      "} catch (error) {",
+      "unread_tabs"
+    ])).toBe(true);
+    // A multi-tab read is never a mutation and never consumes an approval.
+    const mutating = background.slice(
+      background.indexOf("const MUTATING_ACTIONS"),
+      background.indexOf("const APPROVAL_CONTEXT_ACTIONS")
+    );
+    expect(mutating).not.toContain('"collect"');
+    const approvalContext = background.slice(
+      background.indexOf("const APPROVAL_CONTEXT_ACTIONS"),
+      background.indexOf("let socket")
+    );
+    expect(approvalContext).not.toContain('"collect"');
+  });
+
   it("binds a risky new-tab destination to a blank tab it owns before navigating", () => {
     const newTabCase = background.slice(
       background.indexOf('if (action === "new_tab")'),

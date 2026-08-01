@@ -163,6 +163,7 @@ If verification fails, run `npx browseweave@0.1.0-beta.6 doctor`, confirm that t
 - Use `full` only when compact modes omit required evidence.
 - Reuse `since_snapshot_id` after actions.
 - Continue a `truncated` snapshot with its `next_cursor` as `from_cursor` instead of raising `max_chars` or guessing query terms.
+- Read several open tabs with one `browser_collect` call instead of a snapshot per tab, then go deep on the single tab that matters.
 - Prefer `browser_fill_form` over repeated `browser_type`: one command fills up to 30 controls and pays the per-action pacing once.
 - Prefer semantic element refs over coordinates.
 - Use screenshots only for layout, images, canvas, or ambiguous visual state.

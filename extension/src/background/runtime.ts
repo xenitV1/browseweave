@@ -160,8 +160,13 @@ const COMMAND_ACTIONS = new Set([
 
 const CONTENT_ACTIONS = new Set(["snapshot", "click", "click_at", "type", "fill_form", "hover", "press", "scroll", "wait", "attach_file"]);
 const DEFAULT_SNAPSHOT_CHARS = 12_000;
-const MAX_SNAPSHOT_CACHE_ENTRIES = 6;
+// Large enough that one multi-tab read cannot evict every snapshot a caller is
+// still holding a since_snapshot_id for.
+const MAX_SNAPSHOT_CACHE_ENTRIES = 16;
 const SNAPSHOT_FRAME_CONCURRENCY = 6;
+const MAX_COLLECT_TABS = 8;
+/** Bounds total concurrent content messages when each tab also fans out over frames. */
+const COLLECT_TAB_CONCURRENCY = 3;
 const MAX_SCREENSHOT_DATA_URL_CHARS = 12 * 1024 * 1024;
 const MAX_SCREENSHOT_CACHE_ENTRIES = 8;
 const SCREENSHOT_TTL_MS = 120_000;
@@ -1642,6 +1647,81 @@ async function snapshot(payload: Record<string, unknown>, approved: boolean): Pr
   return fullResult;
 }
 
+/**
+ * Reads several tabs in one command.
+ *
+ * Comparing pages used to cost a navigate/wait/snapshot round trip each, with
+ * every snapshot paying the full character budget on its own. This runs the
+ * ordinary snapshot pipeline per tab under a shared budget, so it inherits the
+ * per-frame concurrency, truncation, cursors, and refs of a single-tab read: a
+ * caller narrows down here, then goes deeper on one tab with browser_snapshot.
+ *
+ * A tab that cannot be read — closed, privileged, or paused waiting for the
+ * human — is reported next to the ones that could, because failing the whole
+ * batch for one tab would make the tool useless exactly when it is most needed.
+ */
+async function collect(payload: Record<string, unknown>, approved: boolean): Promise<Record<string, unknown>> {
+  const requested = Array.isArray(payload.tab_ids) ? payload.tab_ids : [];
+  const tabIds = [...new Set(requested.filter((value): value is number => (
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0
+  )))];
+  if (tabIds.length === 0 || tabIds.length !== requested.length || tabIds.length > MAX_COLLECT_TABS) {
+    throw new BridgeError(
+      "invalid_tab_ids",
+      `tab_ids must contain 1 to ${MAX_COLLECT_TABS} unique positive integer tab IDs.`
+    );
+  }
+  const totalChars = typeof payload.max_chars === "number" && Number.isFinite(payload.max_chars)
+    ? Math.min(30_000, Math.max(2_000, Math.trunc(payload.max_chars)))
+    : DEFAULT_SNAPSHOT_CHARS;
+  const perTabChars = Math.max(2_000, Math.floor(totalChars / tabIds.length));
+  const shared: Record<string, unknown> = {
+    mode: payload.mode,
+    max_elements: payload.max_elements,
+    query: payload.query,
+    max_chars: perTabChars
+  };
+
+  const reads = await mapWithConcurrency(tabIds, COLLECT_TAB_CONCURRENCY, async (id) => {
+    try {
+      const tab = await extensionBrowser.tabs.get(id);
+      if (tab.discarded) {
+        // Reading it would wake a tab the browser deliberately unloaded, and the
+        // injection cost of several such tabs is what would push a batch past
+        // the command timeout. A single-tab snapshot can still do it on request.
+        throw new BridgeError(
+          "tab_discarded",
+          "The browser unloaded this tab. Activate it, or read it alone with browser_snapshot."
+        );
+      }
+      if (tabOrigin(tab)) await guardHumanIntervention(tab);
+      return { id, snapshot: await snapshot({ ...shared, tab_id: id }, approved) };
+    } catch (error) {
+      return { id, error };
+    }
+  });
+
+  const tabs: Array<Record<string, unknown>> = [];
+  const unread: Array<Record<string, unknown>> = [];
+  for (const [index, id] of tabIds.entries()) {
+    const read = reads[index];
+    if (read !== undefined && "snapshot" in read) {
+      tabs.push(read.snapshot);
+      continue;
+    }
+    unread.push({
+      tab_id: id,
+      reason: read?.error instanceof Error ? read.error.message : "The tab could not be read."
+    });
+  }
+  return {
+    tabs,
+    unread_tabs: unread,
+    requested_tabs: tabIds.length,
+    max_chars_per_tab: perTabChars
+  };
+}
+
 async function guardNavigationRisk(
   action: "navigate" | "new_tab",
   url: string,
@@ -1980,6 +2060,7 @@ async function executeCommand(
     };
   }
   if (action === "snapshot") return snapshot(payload, approved);
+  if (action === "collect") return collect(payload, approved);
   if (action === "credential_handoff_prepare") return prepareLocalCredentialHandoff(payload);
   if (action === "credential_fill") return fillRemoteCredentials(payload);
   if (action === "wait" && ["load_complete", "url_contains", "url_changed"].includes(String(payload.condition))) {
