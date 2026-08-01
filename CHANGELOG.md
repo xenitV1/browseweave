@@ -6,15 +6,6 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
-## [0.1.0-beta.7] - 2026-08-01
-
-Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
-
-### Added
-
-- Added an owner-only `autonomous_actions` policy section that pre-authorizes named sensitive-action risk categories, so detected clicks, submissions, publications, and cross-site navigations execute without a per-action prompt. It is off by default and lives in the same owner-only `policy.json` as the file-attach allowlist: the daemon never writes it, no MCP method or browser command can set it, and it is read at service start. `{ "autonomous_actions": { "enabled": true } }` covers every page-action category, an explicit `categories` array narrows it, and `file_attach` is covered only when named. The live-target fingerprint check, single-use grants, automatic-replay bounds, credential handoff, path allowlist, and refused browser surfaces are unchanged; grants are audited as `policy_approved` and reported by `browser_status` and `doctor`.
-- `browseweave doctor` now reports the owner policy file path and whether it exists.
-
 ### Added
 
 - Added `browser_collect`, which reads up to 8 already-open tabs in one call under a shared character budget. Comparing pages or gathering material across search results previously cost a separate snapshot per tab, each paying the full budget alone. It runs the ordinary snapshot pipeline per tab, so refs, truncation, and per-tab `next_cursor` behave exactly as in a single-tab read and a caller can follow up on one tab with `browser_snapshot`. Tabs are read a few at a time to bound concurrent page messaging, and a tab that cannot be read — closed, privileged, unloaded by the browser, or paused waiting for the user — is reported in `unread_tabs` instead of failing the batch. It never opens, navigates, or closes a tab, and never consumes an approval. The snapshot cache also grew so that one multi-tab read cannot evict every snapshot a caller still holds a `since_snapshot_id` for.
@@ -25,6 +16,15 @@ Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mo
 ### Fixed
 
 - `browser_new_tab` with an HTTP(S) URL now works. Any destination outside loopback is a detected navigation, but a tab that does not exist yet has no live document to bind the decision to, so the guard failed with `approval_target_unavailable` before reaching any approval channel — a hard error no user decision and no owner policy could grant, even though the tool advertised HTTP(S) URLs. BrowseWeave now opens a blank tab it owns, binds the decision to that exact tab, and navigates it; a retry adopts the same blank tab instead of consuming another slot in the managed-tab budget, and an approval-only recheck never creates one.
+
+## [0.1.0-beta.7] - 2026-08-01
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
+### Added
+
+- Added an owner-only `autonomous_actions` policy section that pre-authorizes named sensitive-action risk categories, so detected clicks, submissions, publications, and cross-site navigations execute without a per-action prompt. It is off by default and lives in the same owner-only `policy.json` as the file-attach allowlist: the daemon never writes it, no MCP method or browser command can set it, and it is read at service start. `{ "autonomous_actions": { "enabled": true } }` covers every page-action category, an explicit `categories` array narrows it, and `file_attach` is covered only when named. The live-target fingerprint check, single-use grants, automatic-replay bounds, credential handoff, path allowlist, and refused browser surfaces are unchanged; grants are audited as `policy_approved` and reported by `browser_status` and `doctor`.
+- `browseweave doctor` now reports the owner policy file path and whether it exists.
 
 ### Changed
 
