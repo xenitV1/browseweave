@@ -6,6 +6,10 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- An approved `browser_new_tab` now actually opens its destination. 0.1.0-beta.8 added the blank-tab binding that gives a risky destination a live document to bind a decision to, but the command dispatcher still refused `new_tab` before that handler ran, because the action was missing from the set allowed to consume a grant. Every granted open therefore ended at "This action cannot consume a page-bound approval grant" — a human decision and an `autonomous_actions` policy grant failed identically, so enabling the policy only replaced the prompt with an immediate error. `new_tab` may now consume a decision, and because its approved target is the blank tab the unapproved attempt opened rather than whichever tab is active, it does not take the active-tab lock the page-bound actions take; the binding is still enforced by the approval fingerprint, which carries that exact host tab ID.
+
 ## [0.1.0-beta.8] - 2026-08-01
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.

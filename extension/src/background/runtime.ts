@@ -214,8 +214,17 @@ const DOM_GUARDED_ACTIONS = new Set<BrowserAction>([
   "navigate", "back", "forward", "reload"
 ]);
 const PAGE_GUARDED_READ_ACTIONS = new Set<BrowserAction>(["snapshot", "screenshot", "credential_handoff_prepare"]);
+/**
+ * Actions whose approved retry may consume a decision. Anything else is refused,
+ * so a grant minted for one context can never be spent on another.
+ *
+ * `new_tab` belongs here even though it owns no document yet: a risky
+ * destination is navigated into a blank tab BrowseWeave opened for exactly this
+ * request, and the approval fingerprint carries that host tab ID, so the
+ * decision is bound just as tightly as a page-bound one.
+ */
 const APPROVAL_CONTEXT_ACTIONS = new Set<BrowserAction>([
-  "click_at", "click", "type", "fill_form", "attach_file", "press", "navigate"
+  "click_at", "click", "type", "fill_form", "attach_file", "press", "navigate", "new_tab"
 ]);
 
 let socket: WebSocket | null = null;
@@ -1054,15 +1063,17 @@ async function handleCommand(command: CommandMessage, currentSocket: WebSocket, 
       if (!APPROVAL_CONTEXT_ACTIONS.has(command.action)) {
         throw new BridgeError("approval_context_changed", "This action cannot consume a page-bound approval grant.");
       }
-      const target = await targetTab(command.payload);
-      const targetTabId = tabId(target);
-      const targetFrameId = command.action === "click_at" || command.action === "navigate"
-        ? 0
-        : frameIdFrom(command.payload);
+      // A new tab has no pre-existing document to lock the grant to, and the
+      // tab that happens to be active is not the approved target: the decision
+      // was bound to the blank tab the unapproved attempt opened. The handler
+      // adopts that same tab and re-derives the fingerprint from its ID, so
+      // locking an active tab here would pin the grant to the wrong tab.
+      const locksLiveTarget = command.action !== "new_tab";
+      const targetTabId = locksLiveTarget ? tabId(await targetTab(command.payload)) : undefined;
       await consumeSessionApproval(command.approval_id as string);
       // Lock an omitted active-tab target to the exact tab whose grant was
       // consumed. A later focus change cannot redirect the approved action.
-      executionPayload = { ...command.payload, tab_id: targetTabId };
+      if (targetTabId !== undefined) executionPayload = { ...command.payload, tab_id: targetTabId };
     }
     const result = await executeCommandWithGuards(
       command.action,

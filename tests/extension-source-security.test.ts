@@ -80,6 +80,31 @@ describe("extension security structure", () => {
     expect(ordered(adoptionBody, ["isBlankTabUrl(candidate.url)", "if (adoptOnly)", '"approval_context_changed"', "createManagedTabUnlocked"])).toBe(true);
   });
 
+  it("lets an approved new tab reach that handler without locking the active tab", () => {
+    // The blank-tab binding above is unreachable unless the dispatcher accepts an
+    // approved new_tab: it refuses every action outside this set before the
+    // handler runs, which stranded a granted open at "This action cannot consume
+    // a page-bound approval grant" no matter how the decision was obtained.
+    const approvalContext = background.slice(
+      background.indexOf("const APPROVAL_CONTEXT_ACTIONS"),
+      background.indexOf("let socket")
+    );
+    expect(approvalContext).toContain('"new_tab"');
+    expect(approvalContext).toContain('"navigate"');
+    // The approved target is the blank tab the unapproved attempt opened, not
+    // whichever tab is active now, so new_tab must not take the active-tab lock.
+    const approvedBranch = background.slice(
+      background.indexOf("if (command.approved) {"),
+      background.indexOf("const result = await executeCommandWithGuards")
+    );
+    expect(ordered(approvedBranch, [
+      'command.action !== "new_tab"',
+      "locksLiveTarget ? tabId(await targetTab(command.payload)) : undefined",
+      "await consumeSessionApproval(command.approval_id as string)",
+      "if (targetTabId !== undefined) executionPayload ="
+    ])).toBe(true);
+  });
+
   it("performs a synchronous target check after async guards and before each side effect", () => {
     const clickCase = content.slice(content.indexOf('case "click":'), content.indexOf('case "hover":'));
     const typeCase = content.slice(content.indexOf('case "type":'), content.indexOf('case "fill_form":'));
