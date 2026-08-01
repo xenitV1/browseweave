@@ -1354,6 +1354,12 @@ export class BrowseWeaveDaemon {
   }
 
   #handleIpcRequest(socket: Socket, request: IpcRequest): void {
+    // Every request carries the caller's session identity, but it is a parameter
+    // of no method: the pairing and approval handlers below accept an exact set
+    // of fields and would reject the request outright for carrying an extra one.
+    // Remove it once here, and let only the browser-action path consume it.
+    const clientId = typeof request.params.client_id === "string" ? request.params.client_id : undefined;
+    const params = jsonObjectWithout(request.params, new Set(["client_id"]));
     if (request.method === "status") {
       const status = this.statusSnapshot();
       const result: BridgeStatus = {
@@ -1370,34 +1376,34 @@ export class BrowseWeaveDaemon {
       return;
     }
     if (request.method === "setup_pairing_begin") {
-      this.#handleSetupPairingBegin(socket, request.id, request.params);
+      this.#handleSetupPairingBegin(socket, request.id, params);
       return;
     }
     if (request.method === "setup_pairing_status") {
-      this.#handleSetupPairingStatus(socket, request.id, request.params);
+      this.#handleSetupPairingStatus(socket, request.id, params);
       return;
     }
     if (request.method === "setup_pairing_cancel") {
-      this.#handleSetupPairingCancel(socket, request.id, request.params);
+      this.#handleSetupPairingCancel(socket, request.id, params);
       return;
     }
     if (request.method === "legacy_pairing_begin") {
-      this.#handleLegacyPairingBegin(socket, request.id, request.params);
+      this.#handleLegacyPairingBegin(socket, request.id, params);
       return;
     }
     if (request.method === "session_approval_begin") {
-      this.#handleSessionApprovalBegin(socket, request.id, request.params);
+      this.#handleSessionApprovalBegin(socket, request.id, params);
       return;
     }
     if (request.method === "session_approval_submit") {
-      this.#handleSessionApprovalSubmit(socket, request.id, request.params);
+      this.#handleSessionApprovalSubmit(socket, request.id, params);
       return;
     }
     if (!isBrowserAction(request.method)) {
       this.#writeFailure(socket, request.id, `Unsupported BrowseWeave method: ${request.method}`);
       return;
     }
-    const hasUntrustedApprovalAuthority = Object.keys(request.params).some((field) =>
+    const hasUntrustedApprovalAuthority = Object.keys(params).some((field) =>
       field === "approved" ||
       field === "revalidate_only" ||
       field.startsWith("approval_") ||
@@ -1409,20 +1415,19 @@ export class BrowseWeaveDaemon {
       return;
     }
 
-    const session = this.#resolveBrowserSession(request.params.browser_id);
+    const session = this.#resolveBrowserSession(params.browser_id);
     if (session instanceof Error) {
       this.#writeFailure(socket, request.id, session.message);
       return;
     }
     if (request.method === "attach_file") {
-      void this.#handleAttachFile(socket, request.id, session, request.params);
+      void this.#handleAttachFile(socket, request.id, session, params);
       return;
     }
     // The identity scopes managed tabs; it is never part of the action's own
     // parameters, so it must not reach the page-facing payload or the approval
     // fingerprint computed from it.
-    const clientId = typeof request.params.client_id === "string" ? request.params.client_id : undefined;
-    const actionParams = jsonObjectWithout(request.params, new Set(["browser_id", "client_id"]));
+    const actionParams = jsonObjectWithout(params, new Set(["browser_id"]));
     const approvedGrant = this.#findApprovalForParams(
       session.browserId,
       request.method,

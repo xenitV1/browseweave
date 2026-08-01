@@ -842,6 +842,21 @@ describe("BrowseWeave daemon integration", () => {
       }
     });
     expect(await ipcCall(harness, "setup_pairing_begin", valid)).toMatchObject({ ok: true });
+    // Every IPC request carries the caller's session identity. It is a parameter
+    // of no method, so a handler that accepts an exact field set must ignore it
+    // rather than reject the whole request: doing the latter broke guided setup
+    // and the approval channel at once.
+    expect(await ipcCall(harness, "setup_pairing_begin", {
+      ...valid,
+      client_id: "11111111-2222-4333-8444-555555555555"
+    })).toMatchObject({ ok: true });
+    expect(await ipcCall(harness, "setup_pairing_status", {
+      setup_id: setupId,
+      client_id: "11111111-2222-4333-8444-555555555555"
+    })).toMatchObject({ ok: true });
+    // An unknown extra field is still refused, so the exact-field check itself
+    // has not been loosened.
+    expect(await ipcCall(harness, "setup_pairing_begin", { ...valid, extra: 1 })).toMatchObject({ ok: false });
     expect(await ipcCall(harness, "setup_pairing_status", { setup_id: setupId })).toEqual({
       id: expect.any(String),
       ok: true,

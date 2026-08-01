@@ -1,6 +1,6 @@
 {
   "name": "browseweave",
-  "version": "0.1.0-beta.11",
+  "version": "0.1.0-beta.12",
   "private": true,
   "description": "Secure local browser bridge and MCP server for AI clients",
   "license": "MIT",

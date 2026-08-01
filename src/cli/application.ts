@@ -1723,6 +1723,27 @@ function openCodeVersionFlag(rest: string[], required: boolean): 1 | 2 | undefin
   return v2Count === 1 ? 2 : 1;
 }
 
+/**
+ * Renders every cause an error carries, one per line.
+ *
+ * A failing browser setup wraps the real problem in an AggregateError together
+ * with any cleanup failure, so printing only the top-level message reduced it to
+ * "Browser setup failed and one or more short-lived resources also failed to
+ * clean up" — which names nothing a person can act on. Nested causes are
+ * indented and the depth is bounded so a cyclic cause cannot loop.
+ */
+export function describeError(error: unknown, depth = 0): string {
+  const indent = "  ".repeat(depth);
+  if (depth > 4) return `${indent}...`;
+  if (!(error instanceof Error)) return `${indent}${String(error)}`;
+  const lines = [`${indent}${error.message}`];
+  if (error instanceof AggregateError) {
+    for (const nested of error.errors) lines.push(describeError(nested, depth + 1));
+  }
+  if (error.cause !== undefined) lines.push(describeError(error.cause, depth + 1));
+  return lines.join("\n");
+}
+
 export async function main(): Promise<void> {
   const commandArgs = process.argv.slice(2);
   const [command, arg, ...rest] = commandArgs;

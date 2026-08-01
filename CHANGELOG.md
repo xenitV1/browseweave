@@ -6,6 +6,17 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.12] - 2026-08-01
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
+Upgrade from 0.1.0-beta.11 immediately: that release could not complete guided setup or a sensitive-action confirmation.
+
+### Fixed
+
+- Guided setup and the sensitive-action approval channel work again. 0.1.0-beta.11 attached the caller's session identity to every IPC request so managed tabs could be scoped to it, but six handlers — `setup_pairing_begin`, `setup_pairing_status`, `setup_pairing_cancel`, `legacy_pairing_begin`, `session_approval_begin`, and `session_approval_submit` — accept an exact set of fields and refused the whole request for carrying one more. Setup failed with "The local setup request is invalid or expired", and a client-session decision could not be started or submitted at all, so a detected sensitive action was uncompletable unless the owner had enabled `autonomous_actions`. The identity is now removed once, before any handler validates its fields, and only the browser-action path consumes it. The exact-field checks themselves are unchanged: an unknown extra field is still refused.
+- `browseweave` now prints every cause an error carries instead of only the outermost message. A failing browser setup reports the real problem and any cleanup failure together in one `AggregateError`, and printing just its summary reduced that to "Browser setup failed and one or more short-lived resources also failed to clean up", which names nothing to act on. Nested causes are indented under it, and the depth is bounded so a cyclic cause cannot loop.
+
 ## [0.1.0-beta.11] - 2026-08-01
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
@@ -181,7 +192,8 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.11...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.12...HEAD
+[0.1.0-beta.12]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.11...v0.1.0-beta.12
 [0.1.0-beta.11]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.10...v0.1.0-beta.11
 [0.1.0-beta.10]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.9...v0.1.0-beta.10
 [0.1.0-beta.9]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.8...v0.1.0-beta.9
