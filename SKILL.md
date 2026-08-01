@@ -162,6 +162,8 @@ If verification fails, run `npx browseweave@0.1.0-beta.6 doctor`, confirm that t
 - Use `balanced` for controls plus nearby meaning and `content` for reading.
 - Use `full` only when compact modes omit required evidence.
 - Reuse `since_snapshot_id` after actions.
+- Continue a `truncated` snapshot with its `next_cursor` as `from_cursor` instead of raising `max_chars` or guessing query terms.
+- Prefer `browser_fill_form` over repeated `browser_type`: one command fills up to 30 controls and pays the per-action pacing once.
 - Prefer semantic element refs over coordinates.
 - Use screenshots only for layout, images, canvas, or ambiguous visual state.
 - Use only fresh screenshot-bound coordinates and fresh refs after navigation or DOM changes.
@@ -169,7 +171,7 @@ If verification fails, run `npx browseweave@0.1.0-beta.6 doctor`, confirm that t
 ## Manage tabs conservatively
 
 - Prefer one reusable task tab.
-- Keep at most 10 BrowseWeave-managed tabs per browser profile; expect the 11th open to fail.
+- Keep at most 10 BrowseWeave-managed tabs per browser profile; expect the 11th open to fail. `browser_list_tabs` reports `managed_tab_count`, `managed_tab_limit`, and a `managed` flag per tab, so check the budget instead of discovering it through a failure.
 - Close each managed tab as soon as its task finishes.
 - Call `browser_cleanup_tabs` in the final cleanup path, including after errors.
 - Never close a pre-existing user tab. Use `browser_close_tab` only for BrowseWeave-managed tabs.

@@ -52,6 +52,8 @@ export interface FrameSnapshot {
   active_element_ref?: string;
   elements: ElementSummary[];
   truncated: boolean;
+  /** Matches skipped because a cursor said they were already delivered. */
+  offset?: number;
 }
 
 export interface RefRegistry {
@@ -564,7 +566,12 @@ function matchesQuery(summary: ElementSummary, query: string): boolean {
 
 export function buildSnapshot(registry: RefRegistry, requested: Partial<SnapshotOptions> = {}): FrameSnapshot {
   registry.prune();
-  const options = normalizeSnapshotOptions(requested.mode, requested.maxElements, requested.query);
+  const options = normalizeSnapshotOptions(
+    requested.mode,
+    requested.maxElements,
+    requested.query,
+    requested.offset
+  );
   const rawVisibleCandidates = queryAllOpenElements(CANDIDATE_SELECTOR).filter(isVisible);
   const allPlainTextCandidates = meaningfulPlainTextCandidates(rawVisibleCandidates);
   const queryLower = options.query.toLocaleLowerCase("tr-TR");
@@ -603,10 +610,15 @@ export function buildSnapshot(registry: RefRegistry, requested: Partial<Snapshot
         : visibleCandidates;
   const elements: ElementSummary[] = [];
   let truncated = false;
+  // Skipped matches are still summarized, so refs stay identical to the refs a
+  // reader saw on the page before the cursor.
+  let matched = 0;
 
   for (const candidate of candidates) {
     const summary = summarizeElement(candidate, registry, options.mode, allowedPlainText.has(candidate));
     if (!summary || !matchesQuery(summary, options.query)) continue;
+    matched += 1;
+    if (matched <= options.offset) continue;
     if (elements.length >= options.maxElements) {
       truncated = true;
       break;
@@ -631,6 +643,7 @@ export function buildSnapshot(registry: RefRegistry, requested: Partial<Snapshot
     truncated
   };
   if (options.query) snapshot.query = options.query;
+  if (options.offset > 0) snapshot.offset = options.offset;
   const activeElement = deepestActiveElement();
   if (activeElement && activeElement !== document.body && isVisible(activeElement)) {
     snapshot.active_element_ref = registry.refFor(activeElement);

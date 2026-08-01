@@ -30,6 +30,9 @@ import {
   MUTATION_INTERVAL_STRESSED_MS,
   normalizePagination,
   normalizeScreenshotOptions,
+  formatSnapshotCursor,
+  parseSnapshotCursor,
+  MAX_SNAPSHOT_OFFSET,
   normalizeSnapshotOptions,
   normalizeText,
   normalizeViewportState,
@@ -294,15 +297,53 @@ describe("BrowseWeave extension pure safety functions", () => {
     expect(normalizeSnapshotOptions(undefined, undefined, undefined)).toEqual({
       mode: "balanced",
       maxElements: 260,
-      query: ""
+      query: "",
+      offset: 0
     });
     expect(normalizeSnapshotOptions("interactive", 9_999, "  ödeme   düğmesi ")).toEqual({
       mode: "interactive",
       maxElements: 400,
-      query: "ödeme düğmesi"
+      query: "ödeme düğmesi",
+      offset: 0
     });
     expect(normalizeSnapshotOptions("full", 9_999, "x")).toMatchObject({ mode: "full", maxElements: 1_200 });
     expect(normalizeSnapshotOptions("bilinmeyen", 20, "x")).toMatchObject({ mode: "balanced", maxElements: 20 });
+  });
+
+  it("bounds the snapshot continuation offset", () => {
+    expect(normalizeSnapshotOptions("balanced", 20, "", 140)).toMatchObject({ offset: 140 });
+    expect(normalizeSnapshotOptions("balanced", 20, "", -5)).toMatchObject({ offset: 0 });
+    expect(normalizeSnapshotOptions("balanced", 20, "", 1.5)).toMatchObject({ offset: 0 });
+    expect(normalizeSnapshotOptions("balanced", 20, "", "140")).toMatchObject({ offset: 0 });
+    expect(normalizeSnapshotOptions("balanced", 20, "", 10_000_000))
+      .toMatchObject({ offset: MAX_SNAPSHOT_OFFSET });
+  });
+
+  it("round-trips a snapshot cursor and refuses anything it did not produce", () => {
+    const cursor = formatSnapshotCursor(new Map([[3, 12], [0, 140]]));
+    // Frames are ordered so the same position always produces the same cursor.
+    expect(cursor).toBe("c1:0=140,3=12");
+    expect(parseSnapshotCursor(cursor)).toEqual(new Map([[0, 140], [3, 12]]));
+
+    // A frame that delivered nothing carries no position.
+    expect(formatSnapshotCursor(new Map([[0, 0]]))).toBe("");
+    expect(formatSnapshotCursor(new Map())).toBe("");
+    expect(formatSnapshotCursor(new Map([[0, MAX_SNAPSHOT_OFFSET + 1]]))).toBe("");
+    expect(formatSnapshotCursor(new Map([[-1, 10]]))).toBe("");
+
+    for (const value of [
+      undefined,
+      "",
+      "c1:",
+      "c2:0=1",
+      "0=1",
+      "c1:0=1,",
+      "c1:0=1,0=2",
+      "c1:a=1",
+      "c1:0=99999999",
+      `c1:0=${MAX_SNAPSHOT_OFFSET + 1}`,
+      `c1:${"0=1,".repeat(200)}0=2`
+    ]) expect(parseSnapshotCursor(value)).toBeNull();
   });
 
   it("minimally separates added, changed, and removed refs between snapshots", () => {

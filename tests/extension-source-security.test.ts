@@ -26,6 +26,32 @@ describe("extension security structure", () => {
     expect(ordered(closeCase, ["isManagedTab(id)", '"tab_not_managed"', "tabs.remove(id)", "untrackManagedTab(id)"])).toBe(true);
   });
 
+  it("binds a risky new-tab destination to a blank tab it owns before navigating", () => {
+    const newTabCase = background.slice(
+      background.indexOf('if (action === "new_tab")'),
+      background.indexOf('throw new BridgeError("unsupported_action"', background.indexOf('if (action === "new_tab")'))
+    );
+    // Adoption comes before the guard so a retry lands on the same tab, and the
+    // guard receives that tab as the live approval target before any navigation.
+    expect(ordered(newTabCase, [
+      "needsLiveBinding",
+      "blankManagedTabForNavigation(active, revalidateOnly)",
+      "await guardNavigationRisk(",
+      "hostId,",
+      "tabs.update(hostId, { url })"
+    ])).toBe(true);
+    // An approval-only recheck must never create a tab.
+    const adoption = readFileSync(
+      new URL("../extension/src/background/managed-tabs.ts", import.meta.url),
+      "utf8"
+    );
+    const adoptionBody = adoption.slice(
+      adoption.indexOf("export async function blankManagedTabForNavigation"),
+      adoption.indexOf("async function createManagedTabUnlocked")
+    );
+    expect(ordered(adoptionBody, ["isBlankTabUrl(candidate.url)", "if (adoptOnly)", '"approval_context_changed"', "createManagedTabUnlocked"])).toBe(true);
+  });
+
   it("performs a synchronous target check after async guards and before each side effect", () => {
     const clickCase = content.slice(content.indexOf('case "click":'), content.indexOf('case "hover":'));
     const typeCase = content.slice(content.indexOf('case "type":'), content.indexOf('case "fill_form":'));

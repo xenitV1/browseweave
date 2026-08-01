@@ -76,6 +76,8 @@ BrowseWeave controls permitted content inside ordinary HTTP(S) pages. It does no
 
 Use `query` to isolate a relevant word or section on large pages. Every result returns a `snapshot_id`; supplying it as `since_snapshot_id` returns `unchanged` when nothing relevant changed, or a compact delta when it did.
 
+A page larger than the budget returns `truncated` with a `next_cursor`. Passing it back as `from_cursor` continues from that exact document position, per frame, so a long article or table can be read completely without raising the budget. The cursor is a position, not a set of element identities: a page that changed between reads can repeat or skip an element.
+
 The default snapshot budget is about 12,000 characters and the hard maximum is 30,000. Screenshots are a separate tool and default to JPEG. This keeps ordinary browser work from flooding the model context with pixels or irrelevant page chrome.
 
 ## Architecture
