@@ -6,6 +6,10 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.9] - 2026-08-01
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
 ### Fixed
 
 - An approved `browser_new_tab` now actually opens its destination. 0.1.0-beta.8 added the blank-tab binding that gives a risky destination a live document to bind a decision to, but the command dispatcher still refused `new_tab` before that handler ran, because the action was missing from the set allowed to consume a grant. Every granted open therefore ended at "This action cannot consume a page-bound approval grant" — a human decision and an `autonomous_actions` policy grant failed identically, so enabling the policy only replaced the prompt with an immediate error. `new_tab` may now consume a decision, and because its approved target is the blank tab the unapproved attempt opened rather than whichever tab is active, it does not take the active-tab lock the page-bound actions take; the binding is still enforced by the approval fingerprint, which carries that exact host tab ID.
@@ -156,7 +160,8 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.8...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.9...HEAD
+[0.1.0-beta.9]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.8...v0.1.0-beta.9
 [0.1.0-beta.8]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.7...v0.1.0-beta.8
 [0.1.0-beta.7]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.6...v0.1.0-beta.7
 [0.1.0-beta.6]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.5...v0.1.0-beta.6

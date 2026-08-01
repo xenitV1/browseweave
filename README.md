@@ -12,7 +12,7 @@ BrowseWeave lets local MCP-compatible AI clients use the web pages already open 
 
 The MCP transport is client-neutral. Automatic configuration is currently implemented for Codex, Claude Code, Cursor, and OpenCode; other local stdio MCP clients require a manually reviewed command/args entry. The browser preview is deliberately limited to Google Chrome and Zen.
 
-> **Linux developer preview:** `0.1.0-beta.8` is intended for explicit, version-pinned beta installation on a systemd-based Linux desktop with working `systemctl --user`. Chrome uses a user-loaded unpacked extension. Zen uses an unsigned temporary add-on. The maintainer has live-connected both browsers on that Linux environment, but clean-machine release verification remains a gate. macOS is implemented and CI-tested but not live-verified. Windows setup, non-systemd Linux service managers, Safari, and browser-store installation are unavailable.
+> **Linux developer preview:** `0.1.0-beta.9` is intended for explicit, version-pinned beta installation on a systemd-based Linux desktop with working `systemctl --user`. Chrome uses a user-loaded unpacked extension. Zen uses an unsigned temporary add-on. The maintainer has live-connected both browsers on that Linux environment, but clean-machine release verification remains a gate. macOS is implemented and CI-tested but not live-verified. Windows setup, non-systemd Linux service managers, Safari, and browser-store installation are unavailable.
 >
 > Install the npm beta from the exact version shown below. It is published under the `beta` dist-tag; the documentation does not use an unpinned `latest` install. Chrome Web Store and Mozilla Add-ons listings remain unavailable.
 
@@ -81,7 +81,7 @@ What the policy does **not** change:
 - The path allowlist, credential handoff, refused surfaces, file-picker and download blocks, managed-tab limits, and untrusted-page-content rules are untouched. Passwords, one-time codes, and payment-card values still cannot be typed through ordinary commands.
 - An unrecognized or absent risk category is never covered, so a future risk class keeps waiting for a human decision instead of inheriting an older policy.
 
-`npx browseweave@0.1.0-beta.8 doctor` reports the policy file path and the categories the running daemon actually loaded. The service also logs the enabled categories at startup. Enabling this is a deliberate trade: the agent will submit, publish, delete, and navigate away without asking first, so keep it to machines and sessions where that is what the owner wants.
+`npx browseweave@0.1.0-beta.9 doctor` reports the policy file path and the categories the running daemon actually loaded. The service also logs the enabled categories at startup. Enabling this is a deliberate trade: the agent will submit, publish, delete, and navigate away without asking first, so keep it to machines and sessions where that is what the owner wants.
 
 BrowseWeave controls permitted content inside ordinary HTTP(S) pages. It does not control browser menus, browser settings pages, extension-store pages, operating-system dialogs, file pickers, hardware security-key dialogs, or other privileged surfaces.
 
@@ -155,7 +155,7 @@ Install the exact public beta globally, then start the guided setup for every
 detected supported browser and MCP client:
 
 ```bash
-npm install --global browseweave@0.1.0-beta.8
+npm install --global browseweave@0.1.0-beta.9
 browseweave setup --all-browsers
 ```
 
@@ -168,7 +168,7 @@ browseweave doctor
 browseweave mcp-config generic
 ```
 
-After a global install, any pinned `npx browseweave@0.1.0-beta.8 ...` example
+After a global install, any pinned `npx browseweave@0.1.0-beta.9 ...` example
 below can be shortened to `browseweave ...`. The version remains explicitly
 pinned so upgrades happen only when requested.
 
@@ -186,16 +186,16 @@ the same flow as `setup --all-browsers`. To target one browser/client combinatio
 instead:
 
 ```bash
-npx browseweave@0.1.0-beta.8 setup --browser chrome --client codex
+npx browseweave@0.1.0-beta.9 setup --browser chrome --client codex
 ```
 
 Other explicit combinations are:
 
 ```bash
-npx browseweave@0.1.0-beta.8 setup --browser zen --client claude-code --client cursor
-npx browseweave@0.1.0-beta.8 setup --browser chrome --browser-path /absolute/path/to/chrome --client codex
-npx browseweave@0.1.0-beta.8 setup --browser chrome --new-profile --client codex
-npx browseweave@0.1.0-beta.8 setup --browser chrome --client opencode --opencode-v2
+npx browseweave@0.1.0-beta.9 setup --browser zen --client claude-code --client cursor
+npx browseweave@0.1.0-beta.9 setup --browser chrome --browser-path /absolute/path/to/chrome --client codex
+npx browseweave@0.1.0-beta.9 setup --browser chrome --new-profile --client codex
+npx browseweave@0.1.0-beta.9 setup --browser chrome --client opencode --opencode-v2
 ```
 
 `--all-browsers` detects all currently supported installed browser applications
@@ -211,14 +211,14 @@ every profile inside them.
 Repeat `--client` to configure any requested combination of `codex`, `claude-code`, `cursor`, and `opencode`. If no client is specified, setup attempts every supported client it detects; explicit flags are safer. Client registration is completed before browser enrollment and launches a trusted npm invocation of `browseweave@latest`. BrowseWeave may replace only an exact older entry from its verified persistent runtime; it preserves unrelated configuration and stops rather than overwriting an ambiguous or foreign `browseweave` entry. For another local stdio MCP client, print a generic entry and adapt it manually to that client's current official schema:
 
 ```bash
-npx browseweave@0.1.0-beta.8 mcp-config generic
+npx browseweave@0.1.0-beta.9 mcp-config generic
 ```
 
 OpenCode has two incompatible configuration generations. BrowseWeave treats an `opencode` executable as V1 and an `opencode2` executable as V2; it does not guess from the contents of the file it is about to change. If both executables are installed, or neither is available on `PATH`, select the intended generation explicitly:
 
 ```bash
-npx browseweave@0.1.0-beta.8 mcp-add opencode --opencode-v1
-npx browseweave@0.1.0-beta.8 mcp-add opencode --opencode-v2
+npx browseweave@0.1.0-beta.9 mcp-add opencode --opencode-v1
+npx browseweave@0.1.0-beta.9 mcp-add opencode --opencode-v2
 ```
 
 Use the same flag with `setup --client opencode`. V1 adds the server directly under `mcp` with `enabled: true`. V2 adds it under `mcp.servers` with `disabled: false` and preserves a sibling `mcp.timeout` block. A missing configuration file is created safely; a mixed, mismatched, or foreign configuration is left untouched. These layouts follow the current official [OpenCode V1 MCP documentation](https://dev.opencode.ai/docs/mcp-servers/) and [OpenCode V2 MCP documentation](https://opencode.ai/v2/docs/mcp-servers).
@@ -248,7 +248,7 @@ The native host manifest contains an exact Firefox extension ID or exact `chrome
 The extension cannot install or rewrite this operating-system helper itself. If Settings says the helper is unavailable, repair the exact beta runtime with:
 
 ```bash
-npx browseweave@0.1.0-beta.8 local-install
+npx browseweave@0.1.0-beta.9 local-install
 ```
 
 In a verified source checkout, rebuild and run:
@@ -330,9 +330,9 @@ expiry.
 After public beta setup, run maintenance and diagnostics through the same pinned package version. The public command delegates to the exact persistent runtime installed by setup rather than registering an ephemeral npm-cache path:
 
 ```bash
-npx browseweave@0.1.0-beta.8 doctor
-npx browseweave@0.1.0-beta.8 extension-path chrome
-npx browseweave@0.1.0-beta.8 extension-path zen
+npx browseweave@0.1.0-beta.9 doctor
+npx browseweave@0.1.0-beta.9 extension-path chrome
+npx browseweave@0.1.0-beta.9 extension-path zen
 ```
 
 `extension-path` is not a replacement for the active guided setup and does not install the native helper. The current settings page has no pairing-key field. If native setup fails, use the verified installer/Repair path above or rerun guided setup; never ask a user to expose a pairing key to an LLM, agent, MCP client, captured terminal, website, issue, log, or commit.
@@ -342,7 +342,7 @@ npx browseweave@0.1.0-beta.8 extension-path zen
 Normal uninstall removes the native registration and background service but preserves local configuration, state, runtime files, and the managed extension copy:
 
 ```bash
-npx browseweave@0.1.0-beta.8 local-uninstall
+npx browseweave@0.1.0-beta.9 local-uninstall
 ```
 
 For a global npm installation, run the cleanup command before removing the CLI:
@@ -400,8 +400,8 @@ npm run verify
 Useful diagnostics:
 
 ```bash
-npx browseweave@0.1.0-beta.8 doctor
-npx browseweave@0.1.0-beta.8 mcp-config generic
+npx browseweave@0.1.0-beta.9 doctor
+npx browseweave@0.1.0-beta.9 mcp-config generic
 ```
 
 The CI matrix builds and tests on Linux, macOS, and Windows. That proves portable code paths compile and pass automated checks; it does not turn macOS or Windows into live beta support. Browser-store signing, clean-machine installation, native GUI lifecycle, sleep/wake recovery, and exact release-browser/client smoke tests remain release gates.
