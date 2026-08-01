@@ -656,3 +656,130 @@ export function focusableElements(): HTMLElement[] {
     "a[href],button,input:not([type='hidden']),select,textarea,[contenteditable='true'],[tabindex]"
   ).filter((element) => isVisible(element) && !isDisabled(element) && element.tabIndex >= 0);
 }
+
+/**
+ * Reads whatever the caller asks for, instead of whatever was anticipated.
+ *
+ * A snapshot reports what a reader can act on, so it deliberately carries
+ * almost nothing from `<head>` and no counts at all: asking it for meta tags,
+ * JSON-LD, or alt-text coverage is not slow, it is impossible. The alternative
+ * an agent reaches for is arbitrary script execution, which an extension cannot
+ * offer on a page that sets a strict CSP, and which puts unmasked values into
+ * model context.
+ *
+ * A CSS selector plus the attributes to project covers that ground without
+ * executing anything: a selector is matched, never evaluated. Predicates the
+ * caller would have written in JavaScript are already expressible — `img:not([alt])`
+ * counts missing alt text, `a[rel~=nofollow]` counts nofollow links — and
+ * `matched` reports the full count even when `limit` returns fewer rows.
+ *
+ * Values are not returned raw. URL attributes are resolved and redacted, and a
+ * form value is masked through exactly the same field classification a snapshot
+ * uses, so querying `input` cannot lift a password into the transcript.
+ */
+export interface QueryOptions {
+  selector: string;
+  attributes: readonly string[];
+  limit: number;
+  includeText: boolean;
+}
+
+export interface QueryRow {
+  ref: string;
+  tag: string;
+  attributes: Record<string, string | null>;
+  text?: string;
+}
+
+const QUERY_LIMITS = {
+  attributes: 12,
+  attributeName: 60,
+  attributeValue: 500,
+  text: 300,
+  rows: 500
+} as const;
+
+/** Attributes whose value is a URL: resolved against the document, then redacted. */
+const URL_ATTRIBUTES = new Set([
+  "href", "src", "action", "formaction", "poster", "cite", "data-src", "longdesc", "ping"
+]);
+
+export function normalizeQueryOptions(
+  selector: unknown,
+  attributes: unknown,
+  limit: unknown,
+  includeText: unknown
+): QueryOptions {
+  const cleanSelector = normalizeText(selector, 300);
+  if (!cleanSelector) throw new Error("A CSS selector is required.");
+  const requested = Array.isArray(attributes) ? attributes : [];
+  const names: string[] = [];
+  for (const entry of requested) {
+    const name = normalizeText(entry, QUERY_LIMITS.attributeName).toLowerCase();
+    // A selector-shaped or whitespace-bearing name is a caller mistake, not an
+    // attribute; refusing it early beats returning silent nulls.
+    if (!name || /[^a-z0-9_:.-]/u.test(name) || names.includes(name)) continue;
+    if (names.length >= QUERY_LIMITS.attributes) break;
+    names.push(name);
+  }
+  const requestedLimit = typeof limit === "number" && Number.isFinite(limit) ? Math.floor(limit) : 50;
+  return {
+    selector: cleanSelector,
+    attributes: names,
+    limit: Math.max(0, Math.min(QUERY_LIMITS.rows, requestedLimit)),
+    includeText: includeText !== false
+  };
+}
+
+function projectAttribute(element: Element, name: string): string | null {
+  if (name === "value") {
+    const descriptor = describeElement(element);
+    const masked = fieldValue(element, descriptor);
+    return masked === undefined ? null : normalizeText(masked, QUERY_LIMITS.attributeValue);
+  }
+  const raw = element.getAttribute(name);
+  if (raw === null) return null;
+  if (URL_ATTRIBUTES.has(name)) {
+    // The property form is already resolved against the document base, so a
+    // relative href reports the address the browser would actually visit.
+    const resolved = (element as unknown as Record<string, unknown>)[name === "data-src" ? "src" : name];
+    const absolute = typeof resolved === "string" && resolved ? resolved : raw;
+    return normalizeText(redactUrl(absolute), QUERY_LIMITS.attributeValue);
+  }
+  return normalizeText(raw, QUERY_LIMITS.attributeValue);
+}
+
+export function queryElements(
+  registry: RefRegistry,
+  options: QueryOptions,
+  root: ParentNode = document
+): { selector: string; matched: number; returned: number; truncated: boolean; rows: QueryRow[] } {
+  let matches: Element[];
+  try {
+    matches = queryAllOpenElements(options.selector, root);
+  } catch {
+    throw new Error(`The CSS selector is not valid: ${options.selector}`);
+  }
+  const rows = matches.slice(0, options.limit).map((element) => {
+    const attributes: Record<string, string | null> = {};
+    for (const name of options.attributes) attributes[name] = projectAttribute(element, name);
+    const row: QueryRow = {
+      ref: registry.refFor(element),
+      tag: element.tagName.toLowerCase(),
+      attributes
+    };
+    if (options.includeText) {
+      row.text = normalizeText((element as HTMLElement).innerText || element.textContent || "", QUERY_LIMITS.text);
+    }
+    return row;
+  });
+  return {
+    selector: options.selector,
+    // The full count is reported even when limit returns fewer rows, so a
+    // caller can count without paying to read.
+    matched: matches.length,
+    returned: rows.length,
+    truncated: matches.length > rows.length,
+    rows
+  };
+}

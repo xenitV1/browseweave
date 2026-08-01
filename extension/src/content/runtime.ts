@@ -6,7 +6,9 @@ import {
   focusableElements,
   isEditable,
   isVisible,
-  queryAllOpenElements
+  normalizeQueryOptions,
+  queryAllOpenElements,
+  queryElements
 } from "../shared/dom-utils";
 import {
   approvalGuardDecision,
@@ -1573,6 +1575,13 @@ async function execute(request: ContentRequest): Promise<unknown> {
   switch (request.action) {
     case "safety_probe":
       return detectHumanIntervention() ?? { requires_human: false };
+    case "query":
+      return queryElements(registry, normalizeQueryOptions(
+        payload.selector,
+        payload.attributes,
+        payload.limit,
+        payload.include_text
+      ));
     case "snapshot": {
       const options = normalizeSnapshotOptions(
         payload.mode,

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isComposedDescendant, queryAllOpenElements } from "../extension/src/shared/dom-utils";
+import {
+  createRefRegistry,
+  isComposedDescendant,
+  normalizeQueryOptions,
+  queryAllOpenElements,
+  queryElements
+} from "../extension/src/shared/dom-utils";
 import {
   BRIDGE_URL,
   MAX_MANAGED_TABS,
@@ -520,6 +526,58 @@ describe("BrowseWeave extension pure safety functions", () => {
     const results = queryAllOpenElements(".target", fakeDocument as unknown as ParentNode);
     expect(results).toEqual([lightTarget, shadowTarget]);
     expect(results).not.toContain(closedTarget);
+  });
+
+  it("bounds a page query and refuses attribute names that are not attributes", () => {
+    const options = normalizeQueryOptions("meta", ["name", "PROPERTY", "content", "name"], 9_999, undefined);
+    expect(options.selector).toBe("meta");
+    // Case-folded, de-duplicated, and clamped to the row ceiling.
+    expect(options.attributes).toEqual(["name", "property", "content"]);
+    expect(options.limit).toBe(500);
+    expect(options.includeText).toBe(true);
+
+    // A selector-shaped or spaced name is a caller mistake, not an attribute;
+    // dropping it beats returning silent nulls.
+    expect(normalizeQueryOptions("a", ["a[href]", "data src", "", "href"], 5, false).attributes).toEqual(["href"]);
+    expect(normalizeQueryOptions("a", Array.from({ length: 40 }, (u, i) => `d-${i}`), 5, true).attributes)
+      .toHaveLength(12);
+    // Counting without reading is the point of a zero limit.
+    expect(normalizeQueryOptions("img", [], 0, true).limit).toBe(0);
+    expect(normalizeQueryOptions("img", [], -5, true).limit).toBe(0);
+    expect(() => normalizeQueryOptions("   ", [], 5, true)).toThrow(/CSS selector is required/);
+  });
+
+  it("reports the full match count while returning only the rows asked for", () => {
+    const element = (tag: string, attributes: Record<string, string>, text = "") => ({
+      tagName: tag.toUpperCase(),
+      textContent: text,
+      getAttribute: (name: string) => attributes[name] ?? null,
+      querySelectorAll: () => []
+    });
+    const first = element("a", { href: "/one", rel: "nofollow" }, "One");
+    const second = element("a", { href: "https://example.com/two?access_token=secret" }, "Two");
+    const third = element("a", { href: "/three" }, "Three");
+    const root = {
+      querySelectorAll: (selector: string) => selector === "*" ? [] : [first, second, third]
+    } as unknown as ParentNode;
+
+    const result = queryElements(
+      createRefRegistry(),
+      normalizeQueryOptions("a[href]", ["href", "rel"], 2, true),
+      root
+    );
+    // A caller can count without paying to read the rows.
+    expect(result.matched).toBe(3);
+    expect(result.returned).toBe(2);
+    expect(result.truncated).toBe(true);
+    expect(result.rows[0]).toMatchObject({ tag: "a", text: "One" });
+    expect(result.rows[0]?.attributes).toEqual({ href: "/one", rel: "nofollow" });
+    // A URL attribute is redacted, so a token in a query string cannot ride into
+    // the transcript.
+    expect(result.rows[1]?.attributes.href).toContain("access_token=%5BMASKED%5D");
+    // An absent attribute is reported as null rather than omitted.
+    expect(queryElements(createRefRegistry(), normalizeQueryOptions("a[href]", ["rel"], 5, false), root)
+      .rows[2]?.attributes).toEqual({ rel: null });
   });
 
   it("accepts only concise meaningful text from role-less SPA content", () => {

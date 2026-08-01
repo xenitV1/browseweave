@@ -166,7 +166,7 @@ const COMMAND_ACTIONS = new Set([
   ...BROWSER_ACTIONS
 ]);
 
-const CONTENT_ACTIONS = new Set(["snapshot", "click", "click_at", "type", "fill_form", "hover", "press", "scroll", "wait", "attach_file"]);
+const CONTENT_ACTIONS = new Set(["snapshot", "query", "click", "click_at", "type", "fill_form", "hover", "press", "scroll", "wait", "attach_file"]);
 const DEFAULT_SNAPSHOT_CHARS = 12_000;
 // Large enough that one multi-tab read cannot evict every snapshot a caller is
 // still holding a since_snapshot_id for.
@@ -221,7 +221,7 @@ const DOM_GUARDED_ACTIONS = new Set<BrowserAction>([
   "hover", "click_at", "click", "type", "fill_form", "credential_fill", "attach_file", "press", "scroll",
   "navigate", "back", "forward", "reload"
 ]);
-const PAGE_GUARDED_READ_ACTIONS = new Set<BrowserAction>(["snapshot", "screenshot", "credential_handoff_prepare"]);
+const PAGE_GUARDED_READ_ACTIONS = new Set<BrowserAction>(["snapshot", "query", "screenshot", "credential_handoff_prepare"]);
 /**
  * Actions whose approved retry may consume a decision. Anything else is refused,
  * so a grant minted for one context can never be spent on another.

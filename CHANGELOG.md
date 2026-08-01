@@ -6,6 +6,14 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.13] - 2026-08-01
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
+### Added
+
+- Added `browser_query`, which reads exactly the page data a caller asks for instead of what was anticipated. A snapshot reports what a reader can act on, so it carries almost nothing from `<head>` and no counts at all: meta tags, JSON-LD, `hreflang`, and alt-text coverage were not slow to reach, they were unreachable, and the remaining option was arbitrary script execution — which an extension cannot offer on a page that sets a strict Content-Security-Policy, and which puts unmasked values into model context. A CSS selector plus the attributes to project covers that ground without executing anything, because a selector is matched rather than evaluated. Predicates belong in the selector, so `img:not([alt])` counts missing alt text and `a[rel~=nofollow]` counts nofollow links; `matched` always reports the full count, so `limit: 0` counts without reading. Matching crosses open shadow roots, and every row carries a `ref` usable with `browser_click` and `browser_type`. URL attributes are resolved and redacted, and a form value passes through the same field classification a snapshot uses, so querying `input` cannot lift a password, one-time code, or card number into a transcript. It is read-only, never opens or navigates a tab, and never consumes an approval.
+
 ## [0.1.0-beta.12] - 2026-08-01
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
@@ -192,7 +200,8 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.12...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.13...HEAD
+[0.1.0-beta.13]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.12...v0.1.0-beta.13
 [0.1.0-beta.12]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.11...v0.1.0-beta.12
 [0.1.0-beta.11]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.10...v0.1.0-beta.11
 [0.1.0-beta.10]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.9...v0.1.0-beta.10

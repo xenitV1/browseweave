@@ -17,6 +17,7 @@ export const BROWSER_ACTIONS = [
   "list_tabs",
   "snapshot",
   "collect",
+  "query",
   "screenshot",
   "wait",
   "hover",
