@@ -462,9 +462,19 @@ export interface SnapshotOptions {
   mode: SnapshotMode;
   maxElements: number;
   query: string;
+  /** How many already-delivered matches to skip, for reading past a cut. */
+  offset: number;
 }
 
-export function normalizeSnapshotOptions(mode: unknown, maxElements: unknown, query: unknown): SnapshotOptions {
+/** Bounds the skip so a hostile or confused cursor cannot walk forever. */
+export const MAX_SNAPSHOT_OFFSET = 20_000 as const;
+
+export function normalizeSnapshotOptions(
+  mode: unknown,
+  maxElements: unknown,
+  query: unknown,
+  offset?: unknown
+): SnapshotOptions {
   const normalizedMode: SnapshotMode = ["interactive", "balanced", "content", "full"].includes(String(mode))
     ? mode as SnapshotMode
     : "balanced";
@@ -483,11 +493,58 @@ export function normalizeSnapshotOptions(mode: unknown, maxElements: unknown, qu
   const requested = typeof maxElements === "number" && Number.isInteger(maxElements)
     ? maxElements
     : defaults[normalizedMode];
+  const requestedOffset = typeof offset === "number" && Number.isInteger(offset) ? offset : 0;
   return {
     mode: normalizedMode,
     maxElements: Math.min(hardLimits[normalizedMode], Math.max(1, requested)),
-    query: normalizeText(query, 200)
+    query: normalizeText(query, 200),
+    offset: Math.min(MAX_SNAPSHOT_OFFSET, Math.max(0, requestedOffset))
   };
+}
+
+/**
+ * A snapshot cursor records how many matches each frame has already delivered.
+ *
+ * It is a position in document order, not a set of element identities: a page
+ * that changed between reads can repeat or skip an element. That is the same
+ * assumption `since_snapshot_id` already makes, and it keeps the cursor small
+ * enough to be an opaque string the caller passes straight back.
+ */
+const SNAPSHOT_CURSOR_PATTERN = /^c1:\d{1,7}=\d{1,7}(?:,\d{1,7}=\d{1,7})*$/u;
+export const MAX_SNAPSHOT_CURSOR_LENGTH = 512 as const;
+
+export function formatSnapshotCursor(offsets: ReadonlyMap<number, number>): string {
+  const parts = [...offsets.entries()]
+    .filter(([frameId, offset]) => (
+      Number.isSafeInteger(frameId) && frameId >= 0 && frameId <= 9_999_999 &&
+      Number.isSafeInteger(offset) && offset > 0 && offset <= MAX_SNAPSHOT_OFFSET
+    ))
+    .sort((left, right) => left[0] - right[0])
+    .map(([frameId, offset]) => `${frameId}=${offset}`);
+  if (parts.length === 0) return "";
+  const cursor = `c1:${parts.join(",")}`;
+  return cursor.length <= MAX_SNAPSHOT_CURSOR_LENGTH ? cursor : "";
+}
+
+/**
+ * Returns per-frame offsets, or null when the value is not a cursor this
+ * version produced. Frames that no longer exist are simply not applied by the
+ * caller, so a real page whose iframes come and go still pages forward.
+ */
+export function parseSnapshotCursor(value: unknown): Map<number, number> | null {
+  if (typeof value !== "string" || value.length > MAX_SNAPSHOT_CURSOR_LENGTH) return null;
+  if (!SNAPSHOT_CURSOR_PATTERN.test(value)) return null;
+  const offsets = new Map<number, number>();
+  for (const part of value.slice(3).split(",")) {
+    const [rawFrame, rawOffset] = part.split("=");
+    const frameId = Number(rawFrame);
+    const offset = Number(rawOffset);
+    if (!Number.isSafeInteger(frameId) || !Number.isSafeInteger(offset)) return null;
+    if (offset > MAX_SNAPSHOT_OFFSET) return null;
+    if (offsets.has(frameId)) return null;
+    offsets.set(frameId, offset);
+  }
+  return offsets.size > 0 ? offsets : null;
 }
 
 function snapshotFrames(snapshot: Record<string, unknown>): Array<Record<string, unknown>> {

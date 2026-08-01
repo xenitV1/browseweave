@@ -21,6 +21,7 @@ The MCP transport is client-neutral. Automatic configuration is currently implem
 - List, select, open, navigate, reload, and close browser tabs.
 - Keep at most 10 BrowseWeave-opened tabs per browser profile and close only those managed tabs during cleanup.
 - Read normal web pages through four context filters instead of sending full HTML.
+- Read up to 8 already-open tabs in one call when comparing pages, without opening or navigating anything.
 - Return only changes since a previous snapshot.
 - Inspect iframes and open Shadow DOM.
 - Click, double-click, hover, type, fill forms, press keys, scroll, and wait for page state.
@@ -75,6 +76,10 @@ BrowseWeave controls permitted content inside ordinary HTTP(S) pages. It does no
 - `full`: a wider but still strictly bounded fallback.
 
 Use `query` to isolate a relevant word or section on large pages. Every result returns a `snapshot_id`; supplying it as `since_snapshot_id` returns `unchanged` when nothing relevant changed, or a compact delta when it did.
+
+`browser_collect` reads up to 8 already-open tabs in one call, sharing one character budget across them. Comparing pages or gathering material across search results costs one call instead of one snapshot per tab; each tab still reports its own `next_cursor`, so the one tab worth reading in full is followed up with `browser_snapshot`. A tab that cannot be read — closed, privileged, unloaded by the browser, or paused waiting for the user — is listed in `unread_tabs` instead of failing the batch. It never opens or navigates a tab.
+
+A page larger than the budget returns `truncated` with a `next_cursor`. Passing it back as `from_cursor` continues from that exact document position, per frame, so a long article or table can be read completely without raising the budget. The cursor is a position, not a set of element identities: a page that changed between reads can repeat or skip an element.
 
 The default snapshot budget is about 12,000 characters and the hard maximum is 30,000. Screenshots are a separate tool and default to JPEG. This keeps ordinary browser work from flooding the model context with pixels or irrelevant page chrome.
 

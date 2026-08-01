@@ -1574,7 +1574,12 @@ async function execute(request: ContentRequest): Promise<unknown> {
     case "safety_probe":
       return detectHumanIntervention() ?? { requires_human: false };
     case "snapshot": {
-      const options = normalizeSnapshotOptions(payload.mode, payload.max_elements, payload.query);
+      const options = normalizeSnapshotOptions(
+        payload.mode,
+        payload.max_elements,
+        payload.query,
+        payload.offset
+      );
       return buildSnapshot(registry, options);
     }
     case "click": {

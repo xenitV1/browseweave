@@ -152,36 +152,93 @@ export async function createManagedTab(
   return withManagedTabsLock(async () => {
     await ensureManagedTabsLoadedUnlocked();
     await reconcileManagedTabsUnlocked();
-    if (!canCreateManagedTab([...managedTabIds])) {
+    return createManagedTabUnlocked(url, active, beforeCreate);
+  });
+}
+
+function isBlankTabUrl(url: string | undefined): boolean {
+  return url === undefined || url === "" || url === "about:blank";
+}
+
+/**
+ * Returns a managed tab that is still sitting on about:blank, creating one only
+ * when none exists.
+ *
+ * Opening a tab at a real site needs a live document to bind the decision to,
+ * so the destination is navigated into a blank tab BrowseWeave owns. A retry of
+ * the same request — the approval channel always retries — must land on that
+ * same tab instead of leaking another one into the managed budget, which is why
+ * adoption comes before creation. During an approval-only recheck nothing may
+ * be created at all, so the absence of an adoptable tab is an error there.
+ */
+export async function blankManagedTabForNavigation(
+  active: boolean,
+  adoptOnly: boolean
+): Promise<browser.tabs.Tab> {
+  return withManagedTabsLock(async () => {
+    await ensureManagedTabsLoadedUnlocked();
+    await reconcileManagedTabsUnlocked();
+    for (const id of normalizeManagedTabIds([...managedTabIds])) {
+      try {
+        const candidate = await extensionBrowser.tabs.get(id);
+        if (isBlankTabUrl(candidate.url)) return candidate;
+      } catch {
+        // Reconciliation already dropped tabs that no longer exist.
+      }
+    }
+    if (adoptOnly) {
       throw new BridgeError(
-        "managed_tab_limit",
-        `This browser profile already has ${MAX_MANAGED_TABS} open tabs created by BrowseWeave. Close one or run browser_cleanup_tabs before opening another.`,
-        undefined,
-        { managed_tab_count: managedTabIds.size, managed_tab_limit: MAX_MANAGED_TABS }
+        "approval_context_changed",
+        "The blank BrowseWeave tab this open request was bound to is gone. Nothing was executed."
       );
     }
-    await beforeCreate();
-    const created = await extensionBrowser.tabs.create({ url, active });
-    if (typeof created.id !== "number" || !Number.isSafeInteger(created.id) || created.id <= 0) {
-      throw new BridgeError("tab_not_found", "The new browser tab did not receive a valid ID and could not be managed safely.");
-    }
-    managedTabIds.add(created.id);
+    return createManagedTabUnlocked("about:blank", active, async () => undefined);
+  });
+}
+
+async function createManagedTabUnlocked(
+  url: string,
+  active: boolean,
+  beforeCreate: () => Promise<void>
+): Promise<browser.tabs.Tab> {
+  if (!canCreateManagedTab([...managedTabIds])) {
+    throw new BridgeError(
+      "managed_tab_limit",
+      `This browser profile already has ${MAX_MANAGED_TABS} open tabs created by BrowseWeave. Close one or run browser_cleanup_tabs before opening another.`,
+      undefined,
+      { managed_tab_count: managedTabIds.size, managed_tab_limit: MAX_MANAGED_TABS }
+    );
+  }
+  await beforeCreate();
+  const created = await extensionBrowser.tabs.create({ url, active });
+  if (typeof created.id !== "number" || !Number.isSafeInteger(created.id) || created.id <= 0) {
+    throw new BridgeError("tab_not_found", "The new browser tab did not receive a valid ID and could not be managed safely.");
+  }
+  managedTabIds.add(created.id);
+  try {
+    await persistManagedTabsUnlocked();
+  } catch (storageError) {
+    let rolledBack = false;
     try {
-      await persistManagedTabsUnlocked();
-    } catch (storageError) {
-      let rolledBack = false;
-      try {
-        await extensionBrowser.tabs.remove(created.id);
-        rolledBack = true;
-      } catch {
-        // Keep the ID in memory when even rollback fails; this worker will still enforce the cap.
-      }
-      if (rolledBack) managedTabIds.delete(created.id);
-      notifyManagedTabState();
-      throw storageError;
+      await extensionBrowser.tabs.remove(created.id);
+      rolledBack = true;
+    } catch {
+      // Keep the ID in memory when even rollback fails; this worker will still enforce the cap.
     }
+    if (rolledBack) managedTabIds.delete(created.id);
     notifyManagedTabState();
-    return created;
+    throw storageError;
+  }
+  notifyManagedTabState();
+  return created;
+}
+
+/** Managed tab IDs for read-only reporting; never a close authorization. */
+export async function managedTabIdList(): Promise<number[]> {
+  return withManagedTabsLock(async () => {
+    await ensureManagedTabsLoadedUnlocked();
+    await reconcileManagedTabsUnlocked();
+    return normalizeManagedTabIds([...managedTabIds]);
   });
 }
 

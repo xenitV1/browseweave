@@ -8,6 +8,8 @@ import {
   classifyRisk,
   diffSnapshots,
   externalNavigationRisk,
+  formatSnapshotCursor,
+  parseSnapshotCursor,
   mutationIntervalMs,
   normalizeNavigationUrl,
   normalizePagination,
@@ -83,9 +85,11 @@ import {
   type CrossBrowserApi
 } from "./environment";
 import {
+  blankManagedTabForNavigation,
   cleanupManagedTabs,
   createManagedTab,
   isManagedTab,
+  managedTabIdList,
   managedTabsSummary,
   managedTabCount,
   untrackManagedTab
@@ -156,8 +160,13 @@ const COMMAND_ACTIONS = new Set([
 
 const CONTENT_ACTIONS = new Set(["snapshot", "click", "click_at", "type", "fill_form", "hover", "press", "scroll", "wait", "attach_file"]);
 const DEFAULT_SNAPSHOT_CHARS = 12_000;
-const MAX_SNAPSHOT_CACHE_ENTRIES = 6;
+// Large enough that one multi-tab read cannot evict every snapshot a caller is
+// still holding a since_snapshot_id for.
+const MAX_SNAPSHOT_CACHE_ENTRIES = 16;
 const SNAPSHOT_FRAME_CONCURRENCY = 6;
+const MAX_COLLECT_TABS = 8;
+/** Bounds total concurrent content messages when each tab also fans out over frames. */
+const COLLECT_TAB_CONCURRENCY = 3;
 const MAX_SCREENSHOT_DATA_URL_CHARS = 12 * 1024 * 1024;
 const MAX_SCREENSHOT_CACHE_ENTRIES = 8;
 const SCREENSHOT_TTL_MS = 120_000;
@@ -1475,11 +1484,15 @@ async function snapshot(payload: Record<string, unknown>, approved: boolean): Pr
   const maxChars = typeof payload.max_chars === "number" && Number.isFinite(payload.max_chars)
     ? Math.min(30_000, Math.max(2_000, Math.trunc(payload.max_chars)))
     : DEFAULT_SNAPSHOT_CHARS;
+  // A cursored read is a different request than the first page, so it never
+  // matches a previous snapshot's signature and never takes the delta path.
+  const requestedCursor = parseSnapshotCursor(payload.from_cursor);
   const signature = JSON.stringify({
     mode: options.mode,
     max_elements: options.maxElements,
     query: options.query,
-    max_chars: maxChars
+    max_chars: maxChars,
+    from_cursor: requestedCursor ? [...requestedCursor.entries()].sort((left, right) => left[0] - right[0]) : null
   });
   let frames = await extensionBrowser.webNavigation.getAllFrames({ tabId: id }).catch(() => null);
   if (!frames?.length) {
@@ -1498,7 +1511,8 @@ async function snapshot(payload: Record<string, unknown>, approved: boolean): Pr
       const frameSnapshot = await sendContentCommand(tab, frame.frameId, "snapshot", {
         mode: options.mode,
         max_elements: options.maxElements,
-        query: options.query
+        query: options.query,
+        offset: requestedCursor?.get(frame.frameId) ?? 0
       }, approved);
       return { frame, snapshot: frameSnapshot as Record<string, unknown> };
     } catch (error) {
@@ -1578,6 +1592,31 @@ async function snapshot(payload: Record<string, unknown>, approved: boolean): Pr
     result.truncated = true;
   }
 
+  // A frame can be cut by its own element limit or by the shared character
+  // budget above, and a whole frame can be dropped. All three mean the reader
+  // has not seen everything, so all three must produce a cursor.
+  const remainingFrames = Array.isArray(result.frames) ? result.frames as Array<Record<string, unknown>> : [];
+  const deliveredOffsets = new Map<number, number>();
+  let moreRemains = typeof result.omitted_frames === "number" && result.omitted_frames > 0;
+  for (const frame of frameList) {
+    const startOffset = requestedCursor?.get(frame.frameId) ?? 0;
+    const delivered = remainingFrames.find((candidate) => candidate.frame_id === frame.frameId);
+    const count = Array.isArray(delivered?.elements) ? (delivered.elements as unknown[]).length : 0;
+    if (delivered === undefined) {
+      // Dropped entirely: the next read must resume exactly where it stopped.
+      if (startOffset > 0) deliveredOffsets.set(frame.frameId, startOffset);
+      continue;
+    }
+    if (delivered.truncated === true) moreRemains = true;
+    if (startOffset + count > 0) deliveredOffsets.set(frame.frameId, startOffset + count);
+  }
+  if (moreRemains) {
+    result.truncated = true;
+    const nextCursor = formatSnapshotCursor(deliveredOffsets);
+    if (nextCursor) result.next_cursor = nextCursor;
+  }
+  if (requestedCursor) result.from_cursor = payload.from_cursor;
+
   const snapshotId = await createSnapshotId(result);
   const sinceId = typeof payload.since_snapshot_id === "string" && /^s-[a-f0-9]{24}$/.test(payload.since_snapshot_id)
     ? payload.since_snapshot_id
@@ -1599,12 +1638,88 @@ async function snapshot(payload: Record<string, unknown>, approved: boolean): Pr
       delta: diffSnapshots(previous.snapshot, result),
       truncated: result.truncated === true
     };
+    if (typeof result.next_cursor === "string") deltaResult.next_cursor = result.next_cursor;
     if (JSON.stringify(deltaResult).length <= maxChars) return deltaResult;
     fullResult.delta_too_large = true;
   } else if (sinceId) {
     fullResult.delta_unavailable = true;
   }
   return fullResult;
+}
+
+/**
+ * Reads several tabs in one command.
+ *
+ * Comparing pages used to cost a navigate/wait/snapshot round trip each, with
+ * every snapshot paying the full character budget on its own. This runs the
+ * ordinary snapshot pipeline per tab under a shared budget, so it inherits the
+ * per-frame concurrency, truncation, cursors, and refs of a single-tab read: a
+ * caller narrows down here, then goes deeper on one tab with browser_snapshot.
+ *
+ * A tab that cannot be read — closed, privileged, or paused waiting for the
+ * human — is reported next to the ones that could, because failing the whole
+ * batch for one tab would make the tool useless exactly when it is most needed.
+ */
+async function collect(payload: Record<string, unknown>, approved: boolean): Promise<Record<string, unknown>> {
+  const requested = Array.isArray(payload.tab_ids) ? payload.tab_ids : [];
+  const tabIds = [...new Set(requested.filter((value): value is number => (
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0
+  )))];
+  if (tabIds.length === 0 || tabIds.length !== requested.length || tabIds.length > MAX_COLLECT_TABS) {
+    throw new BridgeError(
+      "invalid_tab_ids",
+      `tab_ids must contain 1 to ${MAX_COLLECT_TABS} unique positive integer tab IDs.`
+    );
+  }
+  const totalChars = typeof payload.max_chars === "number" && Number.isFinite(payload.max_chars)
+    ? Math.min(30_000, Math.max(2_000, Math.trunc(payload.max_chars)))
+    : DEFAULT_SNAPSHOT_CHARS;
+  const perTabChars = Math.max(2_000, Math.floor(totalChars / tabIds.length));
+  const shared: Record<string, unknown> = {
+    mode: payload.mode,
+    max_elements: payload.max_elements,
+    query: payload.query,
+    max_chars: perTabChars
+  };
+
+  const reads = await mapWithConcurrency(tabIds, COLLECT_TAB_CONCURRENCY, async (id) => {
+    try {
+      const tab = await extensionBrowser.tabs.get(id);
+      if (tab.discarded) {
+        // Reading it would wake a tab the browser deliberately unloaded, and the
+        // injection cost of several such tabs is what would push a batch past
+        // the command timeout. A single-tab snapshot can still do it on request.
+        throw new BridgeError(
+          "tab_discarded",
+          "The browser unloaded this tab. Activate it, or read it alone with browser_snapshot."
+        );
+      }
+      if (tabOrigin(tab)) await guardHumanIntervention(tab);
+      return { id, snapshot: await snapshot({ ...shared, tab_id: id }, approved) };
+    } catch (error) {
+      return { id, error };
+    }
+  });
+
+  const tabs: Array<Record<string, unknown>> = [];
+  const unread: Array<Record<string, unknown>> = [];
+  for (const [index, id] of tabIds.entries()) {
+    const read = reads[index];
+    if (read !== undefined && "snapshot" in read) {
+      tabs.push(read.snapshot);
+      continue;
+    }
+    unread.push({
+      tab_id: id,
+      reason: read?.error instanceof Error ? read.error.message : "The tab could not be read."
+    });
+  }
+  return {
+    tabs,
+    unread_tabs: unread,
+    requested_tabs: tabIds.length,
+    max_chars_per_tab: perTabChars
+  };
 }
 
 async function guardNavigationRisk(
@@ -1634,10 +1749,10 @@ async function guardNavigationRisk(
         : "The navigation no longer matches the approved risk context. Nothing was executed."
     );
   }
-  if (action === "new_tab" || targetTabIdValue === undefined) {
+  if (targetTabIdValue === undefined) {
     throw new BridgeError(
       "approval_target_unavailable",
-      "A new external tab has no live document to bind an approval to. Open a blank managed tab first, then navigate that exact tab."
+      "This navigation has no live document to bind an approval to. Nothing was executed."
     );
   }
   // Full normalized URLs stay inside the SHA-256 material so two masked query
@@ -1858,6 +1973,13 @@ async function waitForTabCondition(payload: Record<string, unknown>): Promise<Re
   if (condition === "url_contains" && !expectedUrl) {
     throw new BridgeError("invalid_wait", "value is required for the url_contains condition.");
   }
+  // After a submit the destination is exactly what is not known yet, so the
+  // baseline is a URL the caller already observed, or the URL at call time when
+  // it supplies none. Both sides are compared in redacted form, which is the
+  // only form a caller can have seen.
+  const baselineUrl = condition === "url_changed"
+    ? (expectedUrl || redactUrl(tab.url || ""))
+    : "";
   const started = performance.now();
   while (true) {
     let current: browser.tabs.Tab;
@@ -1866,15 +1988,24 @@ async function waitForTabCondition(payload: Record<string, unknown>): Promise<Re
     } catch {
       throw new BridgeError("tab_not_found", "The browser tab being waited on was closed.");
     }
+    const currentRedactedUrl = redactUrl(current.url || "");
     const matched = condition === "load_complete"
       ? current.status === "complete"
       : condition === "url_contains"
         ? (current.url || "").includes(expectedUrl)
-        : false;
+        : condition === "url_changed"
+          ? currentRedactedUrl !== baselineUrl
+          : false;
     if (matched) {
-      return { tab_id: id, condition, matched: true, elapsed_ms: Math.round(performance.now() - started) };
+      return {
+        tab_id: id,
+        condition,
+        matched: true,
+        elapsed_ms: Math.round(performance.now() - started),
+        ...(condition === "url_changed" ? { url: currentRedactedUrl, previous_url: baselineUrl } : {})
+      };
     }
-    if (condition !== "load_complete" && condition !== "url_contains") {
+    if (condition !== "load_complete" && condition !== "url_contains" && condition !== "url_changed") {
       throw new BridgeError("invalid_wait", "Unsupported browser wait condition.");
     }
     const elapsed = performance.now() - started;
@@ -1895,6 +2026,10 @@ async function executeCommand(
     const tabs = await extensionBrowser.tabs.query({});
     const pagination = normalizePagination(payload.limit, payload.offset);
     const page = tabs.slice(pagination.offset, pagination.offset + pagination.limit);
+    // Ownership and the paused-tab set are what a caller needs to plan with:
+    // without them it can only discover the managed-tab budget and a waiting
+    // human step by failing into them.
+    const managed = new Set(await managedTabIdList());
     return {
       tabs: page.map((tab) => ({
         id: tab.id,
@@ -1906,19 +2041,29 @@ async function executeCommand(
         discarded: tab.discarded || false,
         status: tab.status || "unknown",
         title: normalizeText(tab.title || "", 300),
-        url: redactUrl(tab.url || "")
+        url: redactUrl(tab.url || ""),
+        managed: typeof tab.id === "number" && managed.has(tab.id)
       })),
       total: tabs.length,
       offset: pagination.offset,
       limit: pagination.limit,
       has_more: pagination.offset + page.length < tabs.length,
-      next_offset: pagination.offset + page.length < tabs.length ? pagination.offset + page.length : null
+      next_offset: pagination.offset + page.length < tabs.length ? pagination.offset + page.length : null,
+      managed_tab_count: managed.size,
+      managed_tab_limit: MAX_MANAGED_TABS,
+      human_intervention_tabs: [...humanInterventions.values()].map((intervention) => ({
+        tab_id: intervention.tab_id,
+        origin: intervention.origin,
+        kind: intervention.kind,
+        detected_at: intervention.detected_at
+      }))
     };
   }
   if (action === "snapshot") return snapshot(payload, approved);
+  if (action === "collect") return collect(payload, approved);
   if (action === "credential_handoff_prepare") return prepareLocalCredentialHandoff(payload);
   if (action === "credential_fill") return fillRemoteCredentials(payload);
-  if (action === "wait" && ["load_complete", "url_contains"].includes(String(payload.condition))) {
+  if (action === "wait" && ["load_complete", "url_contains", "url_changed"].includes(String(payload.condition))) {
     return waitForTabCondition(payload);
   }
   if (action === "click_at") {
@@ -2060,19 +2205,48 @@ async function executeCommand(
   if (action === "new_tab") {
     const url = payload.url === undefined ? "about:blank" : normalizeNavigationUrl(payload.url);
     const active = payload.active !== false;
-    const created = await createManagedTab(url, active, () => guardNavigationRisk(
+    // A destination that carries risk needs a live document to bind the
+    // decision to, which a tab that does not exist yet cannot provide. Open a
+    // blank tab BrowseWeave owns, then navigate that exact tab, so the ordinary
+    // approval channel applies instead of failing with nothing to bind.
+    const needsLiveBinding = externalNavigationRisk(undefined, url, "new_tab") !== null ||
+      classifyRisk({ action: "new_tab", url }) !== null;
+    if (!needsLiveBinding) {
+      const created = await createManagedTab(url, active, () => guardNavigationRisk(
+        "new_tab",
+        url,
+        approved,
+        suppliedFingerprint,
+        revalidateOnly,
+        { active }
+      ));
+      return {
+        tab_id: created.id,
+        window_id: created.windowId,
+        active: created.active,
+        url: redactUrl(created.url || url),
+        managed_tab_count: managedTabCount(),
+        managed_tab_limit: MAX_MANAGED_TABS
+      };
+    }
+    const host = await blankManagedTabForNavigation(active, revalidateOnly);
+    const hostId = tabId(host);
+    await guardNavigationRisk(
       "new_tab",
       url,
       approved,
       suppliedFingerprint,
       revalidateOnly,
-      { active }
-    ));
+      { active, host_tab_id: hostId },
+      hostId,
+      0
+    );
+    const updated = await extensionBrowser.tabs.update(hostId, { url });
     return {
-      tab_id: created.id,
-      window_id: created.windowId,
-      active: created.active,
-      url: redactUrl(created.url || url),
+      tab_id: updated.id ?? hostId,
+      window_id: updated.windowId ?? host.windowId,
+      active: updated.active ?? active,
+      url: redactUrl(url),
       managed_tab_count: managedTabCount(),
       managed_tab_limit: MAX_MANAGED_TABS
     };
