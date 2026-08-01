@@ -65,7 +65,7 @@ Private/incognito browsing is disabled by default and should remain disabled unl
 Disconnect or remove the extension to stop browser access. Remove the exact native-helper registration and per-user daemon service with:
 
 ```bash
-npx browseweave@0.1.0-beta.13 local-uninstall
+npx browseweave@0.1.0-beta.14 local-uninstall
 ```
 
 Normal uninstall preserves local configuration, state, the audit log, the private runtime, and the managed extension copy so accidental removal is recoverable.
@@ -73,7 +73,7 @@ Normal uninstall preserves local configuration, state, the audit log, the privat
 To remove the local bridge configuration, state, runtime files, legacy BrowseWeave data, and persistent managed extension copy, explicitly run:
 
 ```bash
-npx browseweave@0.1.0-beta.13 local-uninstall --purge-data
+npx browseweave@0.1.0-beta.14 local-uninstall --purge-data
 ```
 
 This destructive option removes only exact, current-user-owned BrowseWeave application directories after the service and native registration are removed. It does not remove the extension from Chrome or Zen and cannot clear browser-owned extension storage; remove the extension separately in the browser to clear that state. The Zen Flatpak native-messaging portal preference is preserved because it belongs to the user's browser profile and may be shared by a later reinstall.

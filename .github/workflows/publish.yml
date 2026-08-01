@@ -57,10 +57,16 @@ jobs:
     permissions:
       id-token: write
     steps:
+      # registry-url is deliberately omitted. It makes setup-node write an
+      # .npmrc containing //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN},
+      # and this job sets no such token because it publishes through trusted
+      # publishing. npm then reads an empty credential instead of exchanging the
+      # OIDC token, and the registry answers the unauthenticated PUT with a 404.
+      # The tarball's own package.json carries publishConfig.registry, so the
+      # destination is not lost by leaving this out.
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - name: Download and automatically verify the release artifact
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7

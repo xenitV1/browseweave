@@ -2,7 +2,7 @@
 
 ## Supported release status
 
-`0.1.0-beta.13` is a systemd-based Linux developer preview, not a production or browser-store release. It requires a working systemd user service manager; non-systemd Linux service adapters are unavailable. The unpacked Chrome and temporary Zen paths require visible human consent. macOS is implemented and test-covered but not live-supported; Windows setup is unavailable. Security reports should identify the exact package version, operating system, browser, extension target, and MCP client without including private page data.
+`0.1.0-beta.14` is a systemd-based Linux developer preview, not a production or browser-store release. It requires a working systemd user service manager; non-systemd Linux service adapters are unavailable. The unpacked Chrome and temporary Zen paths require visible human consent. macOS is implemented and test-covered but not live-supported; Windows setup is unavailable. Security reports should identify the exact package version, operating system, browser, extension target, and MCP client without including private page data.
 
 ## Trust boundaries
 
@@ -15,7 +15,7 @@
 
 ## Native-helper and guided setup enrollment
 
-`npx browseweave@0.1.0-beta.13 setup` is a guided installer that requires a visible interactive terminal; it is not a browser-security bypass. Chrome still requires **Developer mode** and **Load unpacked**; Zen still requires **Load Temporary Add-on**. BrowseWeave does not silently install an extension, enable permissions, select a browser profile, or bypass a browser-owned confirmation.
+`npx browseweave@0.1.0-beta.14 setup` is a guided installer that requires a visible interactive terminal; it is not a browser-security bypass. Chrome still requires **Developer mode** and **Load unpacked**; Zen still requires **Load Temporary Add-on**. BrowseWeave does not silently install an extension, enable permissions, select a browser profile, or bypass a browser-owned confirmation.
 
 Initial enrollment uses a private, short-lived loopback setup page. After loading the extension, the human returns to that page and selects **Connect this browser**. The extension Settings button labeled **Connect BrowseWeave** is a separate later repair/reconnect path through native messaging.
 
@@ -161,8 +161,8 @@ BrowseWeave tracks only tabs it created, enforces a maximum of 10 concurrently o
 ## If something looks wrong
 
 1. Disconnect or remove the extension.
-2. Remove the exact native registration and stop the per-user daemon with `npx browseweave@0.1.0-beta.13 local-uninstall`, or use the platform's service manager when the CLI is unavailable.
-3. Run `npx browseweave@0.1.0-beta.13 doctor` and preserve only the metadata audit log.
+2. Remove the exact native registration and stop the per-user daemon with `npx browseweave@0.1.0-beta.14 local-uninstall`, or use the platform's service manager when the CLI is unavailable.
+3. Run `npx browseweave@0.1.0-beta.14 doctor` and preserve only the metadata audit log.
 4. Do not post tokens, page contents, screenshots, or private account data in a public issue.
 
 ## Report a vulnerability

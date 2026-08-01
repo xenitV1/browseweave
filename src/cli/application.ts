@@ -1109,6 +1109,55 @@ async function localInstall(): Promise<void> {
   await installAgentSkills();
   await installService();
   await installNativeHost();
+  await refreshManagedExtensions();
+}
+
+/**
+ * Brings the extension copy this machine already placed up to the running
+ * version.
+ *
+ * Guided setup wrote that copy and nothing else ever touched it, so an npm
+ * upgrade moved the daemon, the native host, and the agent skills forward while
+ * the browser kept loading the previous build. A repair that fixed everything
+ * except the half the browser actually runs is the repair people needed most.
+ *
+ * Only an existing copy is refreshed. A browser this machine never enrolled
+ * must not gain one from a repair command, because loading an extension is the
+ * browser's own consent step and belongs to guided setup.
+ *
+ * The browser still has to be told: an unpacked extension keeps running the
+ * files it loaded until it is reloaded, which is why the path is printed.
+ */
+async function refreshManagedExtensions(): Promise<void> {
+  const parent = managedExtensionParent();
+  const targets = [["chrome", "chromium-mv3"], ["zen", "firefox-mv2"]] as const;
+  for (const [browser, target] of targets) {
+    const destination = path.join(parent, target);
+    try {
+      const info = await lstat(destination);
+      if (!info.isDirectory() || info.isSymbolicLink()) continue;
+    } catch {
+      continue;
+    }
+    try {
+      await prepareManagedExtension({
+        sourcePath: await resolveExtensionPath(browser),
+        stableParent: parent,
+        target,
+        version: APP_VERSION
+      });
+      process.stdout.write(
+        `BrowseWeave ${target} extension files are at ${APP_VERSION} (${destination}). ` +
+        "Reload the extension in that browser so it stops running the previous build.\n"
+      );
+    } catch (error) {
+      // A repair that fixed the service should not be undone by one unreadable
+      // or locally modified copy, but it must say so rather than look complete.
+      process.stdout.write(
+        `BrowseWeave could not refresh the ${target} extension copy: ${describeError(error)}\n`
+      );
+    }
+  }
 }
 
 async function installAgentSkills(): Promise<void> {

@@ -6,6 +6,14 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.14] - 2026-08-01
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
+### Fixed
+
+- `local-install` now brings the browser extension copy up to the running version. It repaired the service, the native host, and the agent skills, but never the copy the browser actually loads, which only guided setup had ever written. Every npm upgrade therefore left the daemon on the new version while the browser kept running the previous build — a gap wide enough that a browser was found four releases behind its daemon — and the repair command that was supposed to fix exactly this reported success without touching it. Only a copy this machine already placed is refreshed; a browser that was never enrolled does not gain one, because loading an extension is the browser's own consent step and belongs to guided setup. The path is printed, since an unpacked extension keeps running the files it loaded until it is reloaded.
+
 ## [0.1.0-beta.13] - 2026-08-01
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
@@ -200,7 +208,8 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.13...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.14...HEAD
+[0.1.0-beta.14]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.13...v0.1.0-beta.14
 [0.1.0-beta.13]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.12...v0.1.0-beta.13
 [0.1.0-beta.12]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.11...v0.1.0-beta.12
 [0.1.0-beta.11]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.10...v0.1.0-beta.11
