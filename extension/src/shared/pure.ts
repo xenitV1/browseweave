@@ -841,6 +841,32 @@ export function redactUrl(rawUrl: unknown): string {
   }
 }
 
+/**
+ * Compacts an oversized subframe URL to the part a reader can act on.
+ *
+ * A frame is addressed by `frame_id`, never by its URL, so an embedded document
+ * only has to say which document it is. Consent, analytics, and player frames
+ * carry their state in the query string instead — one real search-results page
+ * embeds a widget whose URL is 2.4 KB of base64 — and the snapshot budget is
+ * spent on frame headers before page elements are trimmed, so an untrimmed
+ * embed URL is paid for with real content. A URL that is already short keeps
+ * its query, because a short one is usually the part that identifies the frame.
+ */
+export function compactSubframeUrl(rawUrl: unknown, maxLength = 200): string {
+  const redacted = redactUrl(rawUrl);
+  if (redacted.length <= maxLength) return redacted;
+  let compact: string;
+  try {
+    const parsed = new URL(redacted);
+    // The marker keeps the omission visible: a reader must not mistake this for
+    // the frame's whole address.
+    compact = `${parsed.origin}${parsed.pathname}${parsed.search ? "?[TRIMMED]" : ""}`;
+  } catch {
+    compact = redacted;
+  }
+  return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength)}[TRIMMED]`;
+}
+
 export function normalizeNavigationUrl(rawUrl: unknown): string {
   if (typeof rawUrl !== "string" || !rawUrl.trim()) {
     throw new Error("A valid web address is required.");

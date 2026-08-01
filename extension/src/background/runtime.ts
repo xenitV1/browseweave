@@ -11,6 +11,7 @@ import {
   formatSnapshotCursor,
   parseSnapshotCursor,
   mutationIntervalMs,
+  compactSubframeUrl,
   normalizeNavigationUrl,
   normalizePagination,
   normalizeScreenshotOptions,
@@ -1487,6 +1488,28 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+/**
+ * True when a frame's snapshot carries nothing a reader could use or resume:
+ * no delivered elements, nothing withheld, and no headings, landmarks, or
+ * countable content. `counts` is the frame's own total rather than what was
+ * delivered, so zero there also proves nothing is waiting behind a cursor.
+ * Anything unrecognized keeps the frame, so a shape change cannot silently
+ * start hiding frames.
+ */
+function frameCarriesNothing(frame: Record<string, unknown>): boolean {
+  if (frame.truncated === true) return false;
+  if (!Array.isArray(frame.elements) || frame.elements.length > 0) return false;
+  const page = frame.page;
+  if (!page || typeof page !== "object" || Array.isArray(page)) return false;
+  const record = page as Record<string, unknown>;
+  if (!Array.isArray(record.headings) || record.headings.length > 0) return false;
+  if (!Array.isArray(record.landmarks) || record.landmarks.length > 0) return false;
+  const counts = record.counts;
+  if (!counts || typeof counts !== "object" || Array.isArray(counts)) return false;
+  const values = Object.values(counts as Record<string, unknown>);
+  return values.length > 0 && values.every((value) => value === 0);
+}
+
 async function snapshot(payload: Record<string, unknown>, approved: boolean): Promise<Record<string, unknown>> {
   await ensureSessionStateLoaded();
   const tab = await targetTab(payload);
@@ -1530,18 +1553,37 @@ async function snapshot(payload: Record<string, unknown>, approved: boolean): Pr
       return { frame, error };
     }
   });
+  let emptyFrames = 0;
   for (const read of frameReads) {
     if ("snapshot" in read) {
-      outputFrames.push({
+      const frame: Record<string, unknown> = {
         frame_id: read.frame.frameId,
         parent_frame_id: read.frame.parentFrameId,
         ...read.snapshot
-      });
+      };
+      // The top-level URL is the page the caller is on and stays whole. An
+      // embedded frame is addressed by frame_id, so only an oversized one is
+      // compacted, and it is compacted here rather than in the budget passes
+      // below, which would otherwise cut page content to keep this string.
+      if (read.frame.parentFrameId !== -1 && typeof frame.url === "string") {
+        frame.url = compactSubframeUrl(frame.url);
+      }
+      // A frame that reports no elements, no headings, no landmarks, and no
+      // countable content has nothing to resume, so its header is pure cost.
+      // It is counted rather than silently dropped: a caller that expected a
+      // frame to be readable still learns that one was not.
+      if (read.frame.parentFrameId !== -1 && frameCarriesNothing(frame)) {
+        emptyFrames += 1;
+        continue;
+      }
+      outputFrames.push(frame);
       continue;
     }
     incompleteFrames.push({
       frame_id: read.frame.frameId,
-      url: redactUrl(read.frame.url),
+      url: read.frame.parentFrameId === -1
+        ? redactUrl(read.frame.url)
+        : compactSubframeUrl(read.frame.url),
       reason: read.error instanceof Error ? read.error.message : "The frame could not be read."
     });
   }
@@ -1552,6 +1594,9 @@ async function snapshot(payload: Record<string, unknown>, approved: boolean): Pr
     incomplete_frames: incompleteFrames,
     truncated: false
   };
+  // Reported, not implied by omission: unlike omitted_frames this never means
+  // there is more to read, so it must not drive the cursor.
+  if (emptyFrames) result.empty_frames = emptyFrames;
   const contentBudget = Math.max(1_500, maxChars - 160);
   while (JSON.stringify(result).length > contentBudget) {
     const candidates = outputFrames

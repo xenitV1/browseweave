@@ -10,6 +10,7 @@ import {
   canCreateManagedTab,
   classifyRisk,
   compactSelectOptions,
+  compactSubframeUrl,
   diffSnapshots,
   externalNavigationRisk,
   fillBatchKeystrokeIntervalMs,
@@ -236,6 +237,36 @@ describe("BrowseWeave extension pure safety functions", () => {
     expect(output.searchParams.get("access_token")).toBe("[MASKED]");
     expect(output.searchParams.get("session-id")).toBe("[MASKED]");
     expect(output.hash).toBe("#fragment-redacted");
+  });
+
+  it("compacts only an oversized subframe URL, and keeps the omission visible", () => {
+    // A short embed URL is usually the part that identifies the frame.
+    const short = "https://player.example.com/embed?video=42";
+    expect(compactSubframeUrl(short)).toBe(short);
+
+    // A real search-results page embeds this widget; its query alone is 2.3 KB
+    // of base64 state that no caller acts on, while the frame is addressed by
+    // frame_id. Untrimmed it outweighs the page content it displaces.
+    const widget = `https://ogs.google.com/widget/app?hl=tr&xstg=${"A".repeat(2_300)}`;
+    const compacted = compactSubframeUrl(widget);
+    expect(compacted).toBe("https://ogs.google.com/widget/app?[TRIMMED]");
+    expect(compacted.length).toBeLessThan(widget.length / 40);
+
+    // Origin and path survive, so the reader still knows which document it is.
+    expect(compactSubframeUrl(`https://www.youtube.com/embed/?embed_config=${"B".repeat(500)}`))
+      .toBe("https://www.youtube.com/embed/?[TRIMMED]");
+
+    // Sensitive values are still masked before any length decision. The mask is
+    // percent-encoded because redactUrl sets it through searchParams.
+    expect(compactSubframeUrl("https://example.com/f?access_token=abc"))
+      .toBe("https://example.com/f?access_token=%5BMASKED%5D");
+
+    // A path long enough on its own is still bounded.
+    const longPath = `https://example.com/${"p".repeat(400)}`;
+    expect(compactSubframeUrl(longPath).length).toBeLessThanOrEqual(200 + "[TRIMMED]".length);
+
+    // Something that is not a URL cannot grow the budget either.
+    expect(compactSubframeUrl("x".repeat(1_000)).length).toBeLessThanOrEqual(200 + "[TRIMMED]".length);
   });
 
   it("allows navigation only to HTTP, HTTPS, and about:blank", () => {
