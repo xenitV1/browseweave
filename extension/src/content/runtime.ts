@@ -1753,11 +1753,9 @@ async function execute(request: ContentRequest): Promise<unknown> {
       if (!key || key.length > 32) throw new ContentError("invalid_key", "A valid key name is required.");
       const sensitiveDecision = sensitivePressDecision(describeElement(element), key);
       if (sensitiveDecision.disposition === "reject") {
-        const message = sensitiveDecision.category === "password"
-          ? "Password controls accept only Tab, Escape, and navigation keys. Use the dedicated credential handoff for values."
-          : sensitiveDecision.category === "2fa"
-            ? "One-time codes require direct user entry in the browser."
-            : "Payment controls require direct user action in the browser.";
+        const message = sensitiveDecision.category === "2fa"
+          ? "One-time codes require direct user entry in the browser."
+          : "Payment controls require direct user action in the browser.";
         throw new ContentError("sensitive_key_unsupported", message, sensitiveDecision.category);
       }
       if (sensitiveDecision.disposition === "allow_navigation") {

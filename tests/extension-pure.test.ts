@@ -162,24 +162,37 @@ describe("BrowseWeave extension pure safety functions", () => {
     expect(externalNavigationRisk("about:blank", "http://localhost:4173", "existing_tab")).toBeNull();
   });
 
-  it("allows only navigation keys on sensitive and custom sign-in widgets", () => {
-    expect(sensitivePressDecision({ type: "password", name: "password" }, "a"))
-      .toEqual({ disposition: "reject", category: "password" });
+  it("allows only navigation keys on one-time-code and payment widgets", () => {
     expect(sensitivePressDecision({ autocomplete: "one-time-code" }, "Enter"))
       .toEqual({ disposition: "reject", category: "2fa" });
+    expect(sensitivePressDecision({ role: "textbox", ariaLabel: "Doğrulama kodu" }, "Tab"))
+      .toEqual({ disposition: "allow_navigation", category: "2fa" });
     expect(sensitivePressDecision({ autocomplete: "cc-number" }, " "))
       .toEqual({ disposition: "reject", category: "payment" });
-    expect(sensitivePressDecision({ role: "textbox", ariaLabel: "Custom login password" }, "Tab"))
-      .toEqual({ disposition: "allow_navigation", category: "password" });
-    // Account-security targets are not a secrecy class. Pressing them stays in
-    // the ordinary approval channel, exactly like clicking them, instead of a
-    // dead end no approval can open.
-    expect(sensitivePressDecision({ role: "button", text: "Account security" }, "Escape"))
+    expect(sensitivePressDecision({ role: "textbox", ariaLabel: "Kart numarası" }, "1"))
+      .toEqual({ disposition: "reject", category: "payment" });
+    // A payment signal from either classifier rejects, even when the label also
+    // looks like a password.
+    expect(sensitivePressDecision({ type: "password", ariaLabel: "Ödeme şifresi" }, "1"))
+      .toEqual({ disposition: "reject", category: "payment" });
+  });
+
+  it("keeps keys available on password and account-security targets", () => {
+    // Neither is a human-entry-only class: submitting or moving through a login
+    // form is ordinary work, and an account-security effect is already reachable
+    // by clicking the same control. Both stay in the approval channel instead of
+    // a dead end no approval can open.
+    expect(sensitivePressDecision({ type: "password", name: "password" }, "Enter"))
+      .toEqual({ disposition: "normal" });
+    expect(sensitivePressDecision({ role: "textbox", ariaLabel: "Custom login password" }, "a"))
       .toEqual({ disposition: "normal" });
     expect(sensitivePressDecision({ role: "button", text: "Account security" }, "Enter"))
       .toEqual({ disposition: "normal" });
     expect(classifyRisk({ role: "button", text: "Account security", action: "press", key: "Enter" }))
       .toEqual({ category: "security", reason: "Account security or access setting" });
+    // The value itself is still refused by the type and form-fill paths, which
+    // rely on this classification staying intact.
+    expect(sensitiveFieldCategory({ type: "password", name: "password" })).toBe("password");
     expect(sensitivePressDecision({ role: "textbox", ariaLabel: "Project name" }, "a"))
       .toEqual({ disposition: "normal" });
   });

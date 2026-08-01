@@ -710,7 +710,7 @@ server.registerTool(
   {
     title: "Press Key In Browser",
     description:
-      "Press a keyboard key in the active page or a referenced element. When supported heuristics detect a risky submit control, Enter is paused for explicit user confirmation. Detection is not a guarantee. Browser-level and operating-system shortcuts are not supported.",
+      "Press a keyboard key in the active page or a referenced element. When supported heuristics detect a risky submit control, Enter is paused for explicit user confirmation. One-time-code and payment-card targets accept only Tab, Escape, and cursor-navigation keys; those steps belong to the human. Detection is not a guarantee. Browser-level and operating-system shortcuts are not supported.",
     inputSchema: PressInputSchema,
     annotations: {
       readOnlyHint: false,

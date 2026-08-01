@@ -96,7 +96,11 @@ Clicking a file input remains refused. The operating-system picker cannot be dri
 
 ## Credential channels
 
-Ordinary type, form-fill, and character-key actions reject password, one-time-code, and payment-card targets, which keep only Tab, Escape, and cursor-navigation keys. This rejection is decided in the content script and is intentionally outside the approval channel: what it protects is the secret value itself, so no human decision and no owner policy can grant it. Account-security targets are **not** in this class—their risk is a hard-to-reverse effect that the same control already exposes to an ordinary click, so they go through the normal approval channel instead of a dead end. A control whose own label mentions a password, one-time code, or card still falls in the rejected class even when it is a button; click it instead.
+Ordinary type and form-fill actions reject password, one-time-code, and payment-card targets: the value belongs on a credential channel, not in an MCP command. Character-key actions reject a narrower class—one-time-code and payment-card targets, which keep only Tab, Escape, and cursor-navigation keys—because a code lives on the user's own device and is burned by a wrong or stale attempt, and card data is financial. A payment or one-time-code signal from either classifier is enough to reject, so a password-looking label cannot mask one.
+
+These rejections are decided in the content script and are intentionally outside the approval channel: no human decision and no owner policy can grant them.
+
+Password and account-security targets deliberately still accept keys. Submitting or moving through a login form is ordinary work, and an account-security control's risk is a hard-to-reverse effect that the same control already exposes to an ordinary click—so both belong in the normal approval channel rather than a dead end. A password *value* is still refused by the type and form-fill paths.
 
 The recommended five-minute local handoff accepts username/password only in the trusted extension popup and binds them to one live HTTPS origin, document, frame, form, and field set. Values do not enter MCP or the daemon.
 

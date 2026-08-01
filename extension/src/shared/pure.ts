@@ -336,33 +336,42 @@ export function isSafeSearchSubmission(input: RiskInput): boolean {
   return input.formIsSearch === true || SEARCH_WORDS.test(descriptorText(input));
 }
 
-/** Categories whose protected value is the secret itself. */
-export type SecrecyCategory = "password" | "2fa" | "payment";
+/**
+ * Categories whose value only the human's own keystrokes may produce: a
+ * one-time code lives on the user's own device and is burned by a wrong or
+ * stale attempt, and card data is financial. Both stay outside command-driven
+ * key events entirely.
+ */
+export type HumanEntryOnlyCategory = "2fa" | "payment";
 
-const SECRECY_CATEGORIES: readonly string[] = ["password", "2fa", "payment"];
+const HUMAN_ENTRY_ONLY_CATEGORIES: readonly string[] = ["2fa", "payment"];
 
 export type SensitivePressDecision =
   | { disposition: "normal" }
-  | { disposition: "allow_navigation"; category: SecrecyCategory }
-  | { disposition: "reject"; category: SecrecyCategory };
+  | { disposition: "allow_navigation"; category: HumanEntryOnlyCategory }
+  | { disposition: "reject"; category: HumanEntryOnlyCategory };
 
 /**
  * Key events can be handled by custom widgets even when the control is not a
- * native input, so a credential, one-time-code, or payment-looking target keeps
- * only non-mutating focus/navigation keys. What is protected there is the value
- * itself, which must never be driven from a command.
+ * native input, so a one-time-code or payment-looking target keeps only
+ * non-mutating focus/navigation keys.
  *
- * Account-security targets are deliberately not rejected here. Their risk is a
- * hard-to-reverse effect rather than secrecy, and the identical effect is
- * reachable by clicking the same control, so they belong in the ordinary
+ * Two classes are deliberately not rejected here. Password targets accept keys
+ * because submitting or moving through a login form is ordinary work; the value
+ * itself is still refused by the type and form-fill paths, which keep it on the
+ * dedicated credential handoff. Account-security targets carry a
+ * hard-to-reverse effect rather than a secret, and the identical effect is
+ * reachable by clicking the same control. Both therefore belong in the ordinary
  * approval channel instead of a dead end that no approval can open.
  */
 export function sensitivePressDecision(descriptor: FieldDescriptor, key: unknown): SensitivePressDecision {
-  const direct = sensitiveFieldCategory(descriptor);
   const risk = classifyRisk({ ...descriptor, action: "press", key: typeof key === "string" ? key : "" });
-  const category = direct || (risk && SECRECY_CATEGORIES.includes(risk.category)
-    ? risk.category as SecrecyCategory
-    : null);
+  // Either classifier is enough to reject: a password-looking label must not
+  // mask a card or one-time-code signal coming from the other one.
+  const category = [sensitiveFieldCategory(descriptor), risk?.category]
+    .find((value): value is HumanEntryOnlyCategory => (
+      typeof value === "string" && HUMAN_ENTRY_ONLY_CATEGORIES.includes(value)
+    )) ?? null;
   if (!category) return { disposition: "normal" };
   const safeNavigationKeys = new Set([
     "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"

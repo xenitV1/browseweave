@@ -13,6 +13,7 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ### Changed
 
+- Key presses on a password-looking target are no longer rejected in the content script either. Submitting or moving through a login form is ordinary work, and the password *value* is still refused by the type and form-fill paths, which keep it on the dedicated credential handoff. Command-driven key events now reject only one-time-code and payment-card targets, whose value only the human's own keystrokes may produce; a payment or one-time-code signal from either classifier is enough to reject, so a password-looking label cannot mask one.
 - Key presses on an account-security-looking target are no longer rejected in the content script. That rejection exists to keep a secret value from being driven by a command, which covers password, one-time-code, and payment-card targets; an account-security control's risk is a hard-to-reverse effect that the same control already exposes to an ordinary click. Pressing one now goes through the normal approval channel—where a human decision or an owner-policy category can authorize it—instead of a dead end no approval could open. Password, one-time-code, and payment-card targets are unchanged and still accept only Tab, Escape, and cursor-navigation keys.
 
 ### Fixed
