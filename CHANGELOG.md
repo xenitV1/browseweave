@@ -6,6 +6,10 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.8] - 2026-08-01
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
 ### Added
 
 - Added `browser_collect`, which reads up to 8 already-open tabs in one call under a shared character budget. Comparing pages or gathering material across search results previously cost a separate snapshot per tab, each paying the full budget alone. It runs the ordinary snapshot pipeline per tab, so refs, truncation, and per-tab `next_cursor` behave exactly as in a single-tab read and a caller can follow up on one tab with `browser_snapshot`. Tabs are read a few at a time to bound concurrent page messaging, and a tab that cannot be read — closed, privileged, unloaded by the browser, or paused waiting for the user — is reported in `unread_tabs` instead of failing the batch. It never opens, navigates, or closes a tab, and never consumes an approval. The snapshot cache also grew so that one multi-tab read cannot evict every snapshot a caller still holds a `since_snapshot_id` for.
@@ -148,7 +152,8 @@ Published under the npm `beta` dist-tag. No Chrome Web Store or Mozilla Add-ons 
 - Windows setup is unavailable until a fixed signed `browseweave-native-host.exe` is shipped; Node.js scripts, `.cmd`, PowerShell, and shell-wrapper substitutes are rejected.
 - macOS is implementation- and CI-covered but not live-verified. Clean-machine Linux beta installation and exact browser/client version smoke tests remain release gates.
 
-[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.7...HEAD
+[Unreleased]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.8...HEAD
+[0.1.0-beta.8]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.7...v0.1.0-beta.8
 [0.1.0-beta.7]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.6...v0.1.0-beta.7
 [0.1.0-beta.6]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.5...v0.1.0-beta.6
 [0.1.0-beta.5]: https://github.com/xenitV1/browseweave/compare/v0.1.0-beta.4...v0.1.0-beta.5
