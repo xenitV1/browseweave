@@ -11,6 +11,10 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 - Added an owner-only `autonomous_actions` policy section that pre-authorizes named sensitive-action risk categories, so detected clicks, submissions, publications, and cross-site navigations execute without a per-action prompt. It is off by default and lives in the same owner-only `policy.json` as the file-attach allowlist: the daemon never writes it, no MCP method or browser command can set it, and it is read at service start. `{ "autonomous_actions": { "enabled": true } }` covers every page-action category, an explicit `categories` array narrows it, and `file_attach` is covered only when named. The live-target fingerprint check, single-use grants, automatic-replay bounds, credential handoff, path allowlist, and refused browser surfaces are unchanged; grants are audited as `policy_approved` and reported by `browser_status` and `doctor`.
 - `browseweave doctor` now reports the owner policy file path and whether it exists.
 
+### Changed
+
+- Key presses on an account-security-looking target are no longer rejected in the content script. That rejection exists to keep a secret value from being driven by a command, which covers password, one-time-code, and payment-card targets; an account-security control's risk is a hard-to-reverse effect that the same control already exposes to an ordinary click. Pressing one now goes through the normal approval channel—where a human decision or an owner-policy category can authorize it—instead of a dead end no approval could open. Password, one-time-code, and payment-card targets are unchanged and still accept only Tab, Escape, and cursor-navigation keys.
+
 ### Fixed
 
 - A detected sensitive action in an MCP client without elicitation support now reports that the client cannot collect a confirmation, instead of reporting that the user declined. The message names the owner-policy opt-in so the failure is actionable rather than a silent dead end.

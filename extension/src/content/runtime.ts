@@ -1757,9 +1757,7 @@ async function execute(request: ContentRequest): Promise<unknown> {
           ? "Password controls accept only Tab, Escape, and navigation keys. Use the dedicated credential handoff for values."
           : sensitiveDecision.category === "2fa"
             ? "One-time codes require direct user entry in the browser."
-            : sensitiveDecision.category === "payment"
-              ? "Payment controls require direct user action in the browser."
-              : "This account-security control requires direct user action in the browser.";
+            : "Payment controls require direct user action in the browser.";
         throw new ContentError("sensitive_key_unsupported", message, sensitiveDecision.category);
       }
       if (sensitiveDecision.disposition === "allow_navigation") {

@@ -336,21 +336,32 @@ export function isSafeSearchSubmission(input: RiskInput): boolean {
   return input.formIsSearch === true || SEARCH_WORDS.test(descriptorText(input));
 }
 
+/** Categories whose protected value is the secret itself. */
+export type SecrecyCategory = "password" | "2fa" | "payment";
+
+const SECRECY_CATEGORIES: readonly string[] = ["password", "2fa", "payment"];
+
 export type SensitivePressDecision =
   | { disposition: "normal" }
-  | { disposition: "allow_navigation"; category: "password" | "2fa" | "payment" | "security" }
-  | { disposition: "reject"; category: "password" | "2fa" | "payment" | "security" };
+  | { disposition: "allow_navigation"; category: SecrecyCategory }
+  | { disposition: "reject"; category: SecrecyCategory };
 
 /**
  * Key events can be handled by custom widgets even when the control is not a
- * native input. Only non-mutating focus/navigation keys remain available on a
- * target that looks credential, payment, OTP, or account-security related.
+ * native input, so a credential, one-time-code, or payment-looking target keeps
+ * only non-mutating focus/navigation keys. What is protected there is the value
+ * itself, which must never be driven from a command.
+ *
+ * Account-security targets are deliberately not rejected here. Their risk is a
+ * hard-to-reverse effect rather than secrecy, and the identical effect is
+ * reachable by clicking the same control, so they belong in the ordinary
+ * approval channel instead of a dead end that no approval can open.
  */
 export function sensitivePressDecision(descriptor: FieldDescriptor, key: unknown): SensitivePressDecision {
   const direct = sensitiveFieldCategory(descriptor);
   const risk = classifyRisk({ ...descriptor, action: "press", key: typeof key === "string" ? key : "" });
-  const category = direct || (risk && ["password", "2fa", "payment", "security"].includes(risk.category)
-    ? risk.category as "password" | "2fa" | "payment" | "security"
+  const category = direct || (risk && SECRECY_CATEGORIES.includes(risk.category)
+    ? risk.category as SecrecyCategory
     : null);
   if (!category) return { disposition: "normal" };
   const safeNavigationKeys = new Set([

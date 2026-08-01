@@ -171,10 +171,15 @@ describe("BrowseWeave extension pure safety functions", () => {
       .toEqual({ disposition: "reject", category: "payment" });
     expect(sensitivePressDecision({ role: "textbox", ariaLabel: "Custom login password" }, "Tab"))
       .toEqual({ disposition: "allow_navigation", category: "password" });
+    // Account-security targets are not a secrecy class. Pressing them stays in
+    // the ordinary approval channel, exactly like clicking them, instead of a
+    // dead end no approval can open.
     expect(sensitivePressDecision({ role: "button", text: "Account security" }, "Escape"))
-      .toEqual({ disposition: "allow_navigation", category: "security" });
+      .toEqual({ disposition: "normal" });
     expect(sensitivePressDecision({ role: "button", text: "Account security" }, "Enter"))
-      .toEqual({ disposition: "reject", category: "security" });
+      .toEqual({ disposition: "normal" });
+    expect(classifyRisk({ role: "button", text: "Account security", action: "press", key: "Enter" }))
+      .toEqual({ category: "security", reason: "Account security or access setting" });
     expect(sensitivePressDecision({ role: "textbox", ariaLabel: "Project name" }, "a"))
       .toEqual({ disposition: "normal" });
   });

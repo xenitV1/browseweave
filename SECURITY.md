@@ -96,7 +96,9 @@ Clicking a file input remains refused. The operating-system picker cannot be dri
 
 ## Credential channels
 
-Ordinary type, form-fill, and character-key actions reject password, one-time-code, and payment-card targets. The recommended five-minute local handoff accepts username/password only in the trusted extension popup and binds them to one live HTTPS origin, document, frame, form, and field set. Values do not enter MCP or the daemon.
+Ordinary type, form-fill, and character-key actions reject password, one-time-code, and payment-card targets, which keep only Tab, Escape, and cursor-navigation keys. This rejection is decided in the content script and is intentionally outside the approval channel: what it protects is the secret value itself, so no human decision and no owner policy can grant it. Account-security targets are **not** in this class—their risk is a hard-to-reverse effect that the same control already exposes to an ordinary click, so they go through the normal approval channel instead of a dead end. A control whose own label mentions a password, one-time code, or card still falls in the rejected class even when it is a button; click it instead.
+
+The recommended five-minute local handoff accepts username/password only in the trusted extension popup and binds them to one live HTTPS origin, document, frame, form, and field set. Values do not enter MCP or the daemon.
 
 Remote fallback is disabled until the user grants a visible, revocable, one-use permission for the exact active HTTPS origin. It expires within 24 hours and is consumed before the fill attempt. Remote credential values are visible to the selected AI client/model provider, but BrowseWeave does not persist, log, echo, or return them. Neither channel handles OTP, recovery codes, payment cards, CAPTCHA, WebAuthn, or hardware keys.
 
