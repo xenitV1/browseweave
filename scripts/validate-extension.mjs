@@ -41,7 +41,7 @@ const actionIconEntries = {
   48: "icons/icon-48.png"
 };
 const firefoxPermissions = ["<all_urls>", "tabs", "webNavigation", "storage", "nativeMessaging"];
-const chromiumPermissions = ["tabs", "webNavigation", "storage", "scripting", "nativeMessaging"];
+const chromiumPermissions = ["alarms", "tabs", "webNavigation", "storage", "scripting", "nativeMessaging"];
 const firefoxDisclosure = [
   "authenticationInfo",
   "browsingActivity",

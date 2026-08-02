@@ -282,7 +282,7 @@ async function inspectPack() {
 
   const extensionPermissions = new Map([
     ["firefox-mv2", ["<all_urls>", "tabs", "webNavigation", "storage", "nativeMessaging"]],
-    ["chromium-mv3", ["tabs", "webNavigation", "storage", "scripting", "nativeMessaging"]]
+    ["chromium-mv3", ["alarms", "tabs", "webNavigation", "storage", "scripting", "nativeMessaging"]]
   ]);
   for (const [target, expectedPermissions] of extensionPermissions) {
     const manifestPath = path.join(projectDirectory, "extension", "dist", target, "manifest.json");

@@ -12,6 +12,7 @@
   },
   "minimum_chrome_version": "116",
   "permissions": [
+    "alarms",
     "tabs",
     "webNavigation",
     "storage",

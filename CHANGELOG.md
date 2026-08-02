@@ -9,6 +9,7 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 ### Changed
 
 - MCP client registrations now launch the exact verified persistent BrowseWeave runtime directly instead of running `npm exec browseweave@latest` for every AI-client session. This removes the npm/cache lookup, shell shim, extra process chain, and network dependency from startup while preserving strict migration rules: only exact older BrowseWeave entries are replaced and foreign entries remain untouched.
+- Chrome's MV3 background worker now arms a persistent one-minute reconnect alarm while the local daemon is unavailable and clears it after authentication. Chrome can therefore wake a suspended worker and reconnect after a longer daemon outage instead of relying only on an in-memory timeout that disappears with the worker.
 
 ### Security
 

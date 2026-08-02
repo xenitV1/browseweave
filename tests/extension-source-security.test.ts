@@ -20,6 +20,21 @@ function ordered(source: string, fragments: string[]): boolean {
 }
 
 describe("extension security structure", () => {
+  it("keeps Chrome MV3 reconnects alive across service-worker suspension", () => {
+    expect(background).toContain('const RECONNECT_ALARM_NAME = "browseweave-reconnect"');
+    expect(ordered(background, [
+      "function scheduleReconnect",
+      "armPersistentReconnectWake()",
+      "globalThis.setTimeout"
+    ])).toBe(true);
+    expect(background).toContain("extensionBrowser.alarms.onAlarm.addListener");
+    expect(ordered(background, [
+      'record.type === "hello_ack"',
+      "disarmPersistentReconnectWake()",
+      'phase: "connected"'
+    ])).toBe(true);
+  });
+
   it("checks managed ownership before a single tab can be removed", () => {
     const start = background.indexOf('if (action === "close_tab")');
     const closeCase = background.slice(start, background.indexOf('if (action === "cleanup_tabs")', start));

@@ -474,6 +474,41 @@ function clearConnectionTimers(): void {
   }
 }
 
+const RECONNECT_ALARM_NAME = "browseweave-reconnect";
+const RECONNECT_ALARM_PERIOD_MINUTES = 1;
+
+/**
+ * MV3 service workers may be suspended while the daemon is unavailable, which
+ * discards an in-memory reconnect timer. A Chrome alarm survives that worker
+ * lifetime and wakes it again; Firefox keeps its persistent background page
+ * and therefore continues to use only the ordinary timer.
+ */
+function chromiumReconnectAlarms(): typeof browser.alarms | undefined {
+  return extensionBrowser.runtime.getManifest().manifest_version === 3
+    ? extensionBrowser.alarms
+    : undefined;
+}
+
+async function armPersistentReconnectWake(): Promise<void> {
+  const alarms = chromiumReconnectAlarms();
+  if (!alarms) return;
+  try {
+    if (await alarms.get(RECONNECT_ALARM_NAME)) return;
+    await alarms.create(RECONNECT_ALARM_NAME, {
+      delayInMinutes: RECONNECT_ALARM_PERIOD_MINUTES,
+      periodInMinutes: RECONNECT_ALARM_PERIOD_MINUTES
+    });
+  } catch {
+    // The short in-memory retry remains available if the browser refuses an alarm.
+  }
+}
+
+async function disarmPersistentReconnectWake(): Promise<void> {
+  const alarms = chromiumReconnectAlarms();
+  if (!alarms) return;
+  await alarms.clear(RECONNECT_ALARM_NAME).catch(() => undefined);
+}
+
 async function storedToken(): Promise<string> {
   const stored = await extensionBrowser.storage.local.get(TOKEN_STORAGE_KEY);
   const value = stored[TOKEN_STORAGE_KEY];
@@ -511,6 +546,7 @@ function scheduleReconnect(generation: number): void {
   const nextAttempt = state.reconnectAttempt + 1;
   const delay = Math.min(30_000, 750 * (2 ** Math.min(nextAttempt - 1, 6))) + Math.floor(Math.random() * 250);
   setState({ reconnectAttempt: nextAttempt, phase: "disconnected" });
+  void armPersistentReconnectWake();
   reconnectTimer = globalThis.setTimeout(() => {
     reconnectTimer = undefined;
     void connect();
@@ -552,6 +588,7 @@ async function connect(staged?: {
   const token = staged?.pairingToken ?? ordinaryOverride?.pairingToken ?? await storedToken();
   if (generation !== connectionGeneration) return;
   if (token.length < 16) {
+    void disarmPersistentReconnectWake();
     setState({ phase: "needs_token", lastError: "A pairing key has not been configured.", connectedAt: null });
     return;
   }
@@ -1001,6 +1038,7 @@ async function handleSocketMessage(
     }
     browserId = acceptedBrowserId;
     authenticated = true;
+    void disarmPersistentReconnectWake();
     setState({ phase: "connected", lastError: "", connectedAt: new Date().toISOString(), reconnectAttempt: 0 });
     return;
   }
@@ -2497,6 +2535,17 @@ extensionBrowser.runtime.onMessage.addListener((message: unknown, sender) => {
 extensionBrowser.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && TOKEN_STORAGE_KEY in changes && !setupPairingInProgress) void connect();
 });
+
+if (extensionBrowser.runtime.getManifest().manifest_version === 3) {
+  extensionBrowser.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== RECONNECT_ALARM_NAME) return;
+    if (authenticated) {
+      void disarmPersistentReconnectWake();
+      return;
+    }
+    if (!setupPairingInProgress && !nativeSetupLaunchInProgress) void connect();
+  });
+}
 
 function onPageNavigation(details: { tabId: number; frameId: number }): void {
   if (details.frameId === 0) void revokeCredentialHandoffsForTab(details.tabId).catch(() => undefined);
