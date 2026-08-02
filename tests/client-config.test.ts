@@ -7,7 +7,8 @@ import {
   claudeProjectRegistrationState,
   clientSetup,
   codexRegistrationState,
-  defaultMcpLaunchSpec,
+  directMcpLaunchSpec,
+  latestNpmMcpLaunchSpec,
   legacyNpmMcpLaunchSpec,
   mergeCursorConfig,
   mergeOpenCodeConfig,
@@ -43,8 +44,21 @@ afterEach(async () => {
 });
 
 describe("vendor-neutral MCP client setup", () => {
-  it("generates a trusted npm invocation pinned to browseweave@latest", async () => {
-    const latest = await defaultMcpLaunchSpec();
+  it("generates a direct exact-runtime invocation without npm or a shell", () => {
+    const direct = directMcpLaunchSpec(
+      "/opt/BrowseWeave Runtime/node",
+      "/opt/BrowseWeave Runtime/node_modules/browseweave/dist/src/mcp.js"
+    );
+    expect(direct).toEqual({
+      command: "/opt/BrowseWeave Runtime/node",
+      args: ["/opt/BrowseWeave Runtime/node_modules/browseweave/dist/src/mcp.js"],
+      env: {}
+    });
+    expect(JSON.stringify(direct)).not.toMatch(/npm|npx|@latest|shell/iu);
+  });
+
+  it("recognizes the exact former browseweave@latest launcher as a migration candidate", async () => {
+    const latest = await latestNpmMcpLaunchSpec();
     expect(path.isAbsolute(latest.command)).toBe(true);
     expect(latest.args.slice(-6)).toEqual([
       "exec", "--yes", "--package=browseweave@latest", "--", "browseweave", "mcp"
@@ -187,6 +201,28 @@ describe("safe direct MCP configuration merges", () => {
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
       mcpServers: { browseweave: { command: spec.command, args: spec.args, env: {} } }
     });
+  });
+
+  it("migrates the exact former npm launcher but preserves a lookalike", async () => {
+    const directory = await temporaryDirectory();
+    const formerLatest = await latestNpmMcpLaunchSpec();
+    const configPath = path.join(directory, "mcp.json");
+    await writeFile(configPath, JSON.stringify({
+      mcpServers: { browseweave: { command: formerLatest.command, args: formerLatest.args, env: {} } }
+    }));
+    expect(await mergeCursorConfig(configPath, spec, [formerLatest])).toMatchObject({ status: "updated" });
+
+    const lookalikePath = path.join(directory, "lookalike.json");
+    await writeFile(lookalikePath, JSON.stringify({
+      mcpServers: {
+        browseweave: {
+          command: formerLatest.command,
+          args: [...formerLatest.args, "--unexpected"],
+          env: {}
+        }
+      }
+    }));
+    await expect(mergeCursorConfig(lookalikePath, spec, [formerLatest])).rejects.toThrow(/foreign browseweave/iu);
   });
 
   it("merges the explicitly selected OpenCode schema without guessing from server names", async () => {

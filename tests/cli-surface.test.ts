@@ -6,6 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { APP_VERSION } from "../src/core/version.js";
 
 const cli = fileURLToPath(new URL("../dist/src/cli.js", import.meta.url));
+const mcp = fileURLToPath(new URL("../dist/src/mcp.js", import.meta.url));
 
 describe("public CLI surface", () => {
   it("starts the versioned MCP server through the npm-facing CLI subcommand", async () => {
@@ -35,6 +36,22 @@ describe("public CLI surface", () => {
     expect(result.stdout).toContain("--all-browsers");
     expect(result.stdout).toContain("Pairing credentials are never printed");
     expect(result.stdout).not.toContain("pairing-token");
+  });
+
+  it("prints a direct exact-runtime MCP entry without npm startup work", () => {
+    const result = spawnSync(process.execPath, [cli, "mcp-config", "generic"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      maxBuffer: 64 * 1024
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const output = JSON.parse(result.stdout) as Record<string, any>;
+    expect(output.config.mcpServers.browseweave).toEqual({
+      command: process.execPath,
+      args: [mcp],
+      env: {}
+    });
+    expect(result.stdout).not.toMatch(/npm|npx|@latest/iu);
   });
 
   it("keeps all-browser setup mutually exclusive with a single browser target", () => {

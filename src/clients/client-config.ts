@@ -72,8 +72,13 @@ export function validateMcpLaunchSpec(spec: McpLaunchSpec): McpLaunchSpec {
   };
 }
 
-/** Resolve a trusted npm beside the active Node runtime and always launch the current latest package. */
-export async function defaultMcpLaunchSpec(): Promise<McpLaunchSpec> {
+/** Launch one exact installed MCP entrypoint with the current trusted Node runtime. */
+export function directMcpLaunchSpec(nodeExecutable: string, mcpEntrypoint: string): McpLaunchSpec {
+  return validateMcpLaunchSpec({ command: nodeExecutable, args: [mcpEntrypoint], env: {} });
+}
+
+/** Exact npm form emitted before persistent runtimes became the default MCP launcher. */
+export async function latestNpmMcpLaunchSpec(): Promise<McpLaunchSpec> {
   const invocation = await trustedNpmInvocation([
     "exec",
     "--yes",

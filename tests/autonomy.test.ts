@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ALWAYS_CONFIRM_RISK_CATEGORIES,
   AUTONOMOUS_RISK_CATEGORIES,
+  DEFAULT_AUTONOMOUS_RISK_CATEGORIES,
   DISABLED_AUTONOMY_POLICY,
   autonomyPolicySummary,
   isAutonomousCategory,
@@ -45,33 +47,42 @@ describe("autonomous action policy", () => {
     expect(await loadAutonomyPolicy(configDir)).toEqual(DISABLED_AUTONOMY_POLICY);
   });
 
-  it("covers every page-action category but never file attachment by default", async () => {
+  it("covers only routine transition categories by default", async () => {
     const configDir = await writePolicy({ enabled: true });
     const policy = await loadAutonomyPolicy(configDir);
     for (const category of AUTONOMOUS_RISK_CATEGORIES) {
-      expect(isAutonomousCategory(policy, category)).toBe(category !== "file_attach");
+      expect(isAutonomousCategory(policy, category)).toBe(
+        DEFAULT_AUTONOMOUS_RISK_CATEGORIES.includes(
+          category as (typeof DEFAULT_AUTONOMOUS_RISK_CATEGORIES)[number]
+        )
+      );
     }
-    expect(autonomyPolicySummary(policy).categories).not.toContain("file_attach");
+    expect(autonomyPolicySummary(policy)).toEqual({
+      enabled: true,
+      categories: [...DEFAULT_AUTONOMOUS_RISK_CATEGORIES]
+    });
   });
 
-  it("honors an explicit category list, including opting file attachment in", async () => {
+  it("honors an explicit list of routine categories", async () => {
     const narrow = await loadAutonomyPolicy(await writePolicy({
       enabled: true,
-      categories: ["form_submit", "external_navigation"]
+      categories: ["external_navigation"]
     }));
-    expect(isAutonomousCategory(narrow, "form_submit")).toBe(true);
+    expect(isAutonomousCategory(narrow, "form_submit")).toBe(false);
+    expect(isAutonomousCategory(narrow, "external_navigation")).toBe(true);
     expect(isAutonomousCategory(narrow, "delete")).toBe(false);
     expect(autonomyPolicySummary(narrow)).toEqual({
       enabled: true,
-      categories: ["form_submit", "external_navigation"]
+      categories: ["external_navigation"]
     });
+  });
 
-    const withAttachments = await loadAutonomyPolicy(await writePolicy({
-      enabled: true,
-      categories: ["file_attach"]
-    }));
-    expect(isAutonomousCategory(withAttachments, "file_attach")).toBe(true);
-    expect(isAutonomousCategory(withAttachments, "payment")).toBe(false);
+  it("never lets an owner-wide policy authorize a high-risk category", async () => {
+    for (const category of ALWAYS_CONFIRM_RISK_CATEGORIES) {
+      const configDir = await writePolicy({ enabled: true, categories: [category] });
+      await expect(loadAutonomyPolicy(configDir)).rejects.toThrow(/always requires/u);
+      expect(isAutonomousCategory({ enabled: true, categories: new Set([category]) }, category)).toBe(false);
+    }
   });
 
   it("never covers a missing or unrecognized risk category", async () => {

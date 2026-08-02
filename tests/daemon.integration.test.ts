@@ -2301,13 +2301,13 @@ describe("owner-declared autonomous actions", () => {
 
     const call = ipcCall(harness, "click", params);
     const probe = await extension.next("command");
-    extension.socket.send(commandFailure(probe, FINGERPRINT_A, UNTRUSTED_LABEL, "message"));
+    extension.socket.send(commandFailure(probe, FINGERPRINT_A, UNTRUSTED_LABEL, "form_submit"));
     const firstGrant = await extension.next("command");
     expect(firstGrant).toMatchObject({ approved: true, approval_fingerprint: FINGERPRINT_A });
-    extension.socket.send(commandFailure(firstGrant, FINGERPRINT_B, UNTRUSTED_LABEL, "message"));
+    extension.socket.send(commandFailure(firstGrant, FINGERPRINT_B, UNTRUSTED_LABEL, "form_submit"));
     const secondGrant = await extension.next("command");
     expect(secondGrant).toMatchObject({ approved: true, approval_fingerprint: FINGERPRINT_B });
-    extension.socket.send(commandFailure(secondGrant, FINGERPRINT_C, UNTRUSTED_LABEL, "message"));
+    extension.socket.send(commandFailure(secondGrant, FINGERPRINT_C, UNTRUSTED_LABEL, "form_submit"));
 
     expect(await call).toMatchObject({ ok: true, result: { approval_required: true } });
     await expect(extension.next("command", 100)).rejects.toThrow(/Timed out/u);
@@ -2315,7 +2315,7 @@ describe("owner-declared autonomous actions", () => {
     expect(await readFile(harness.config.auditLogPath, "utf8")).toContain("policy_replay_limit");
   });
 
-  it("keeps file attachment behind exact-file confirmation unless the owner names it", async () => {
+  it("keeps file attachment behind exact-file confirmation and preserves the client identity", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "browseweave-daemon-"));
     const documents = path.join(root, "documents");
     await mkdir(documents, { recursive: true });
@@ -2324,7 +2324,7 @@ describe("owner-declared autonomous actions", () => {
       path.join(root, "config", "policy.json"),
       JSON.stringify({
         file_attach: { enabled: true, allowed_directories: [documents] },
-        autonomous_actions: { enabled: true }
+        autonomous_actions: { enabled: true, categories: ["form_submit"] }
       }),
       { mode: 0o600 }
     );
@@ -2345,18 +2345,23 @@ describe("owner-declared autonomous actions", () => {
       harness,
       makeSigningIdentity("a5a5a5a5-a5a5-4a5a-8a5a-a5a5a5a5a5a5")
     );
+    const clientId = "55555555-5555-4555-8555-555555555555";
     const call = ipcCall(harness, "attach_file", {
       browser_id: extension.browserId,
       tab_id: 15,
       frame_id: 0,
       ref: "bw-35",
-      path: attachment
+      path: attachment,
+      client_id: clientId
     });
     const probe = await extension.next("command");
-    extension.socket.send(commandFailure(probe, FINGERPRINT_A, UNTRUSTED_LABEL, "file_attach"));
+    expect(probe.client_id).toBe(clientId);
+    // Even a stale or mistaken extension category cannot turn file attachment
+    // into an owner-policy-approved action.
+    extension.socket.send(commandFailure(probe, FINGERPRINT_A, UNTRUSTED_LABEL, "form_submit"));
     expect(await call).toMatchObject({
       ok: true,
-      result: { approval_required: true, approval_ui: "mcp_session", risk: "file_attach" }
+      result: { approval_required: true, approval_ui: "mcp_session", risk: "form_submit" }
     });
     await expect(extension.next("command", 100)).rejects.toThrow(/Timed out/u);
   });

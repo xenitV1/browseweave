@@ -39,14 +39,37 @@ export const AUTONOMOUS_RISK_CATEGORIES = [
 export type AutonomousRiskCategory = (typeof AUTONOMOUS_RISK_CATEGORIES)[number];
 
 /**
- * Covered when the owner enables the section without naming categories.
- *
- * `file_attach` is deliberately excluded: it sends a local file from the
- * computer to a website, so it stays behind the exact-file confirmation unless
- * the owner names it explicitly.
+ * Low-risk categories covered by the short `{ enabled: true }` policy.
+ * Ordinary reads, typing, scrolling, and same-site navigation do not report a
+ * risk category at all and therefore remain uninterrupted without appearing
+ * here. These two categories cover the remaining routine transitions while
+ * the irreversible or disclosure-prone categories below always stop.
  */
-const DEFAULT_CATEGORIES: readonly AutonomousRiskCategory[] = AUTONOMOUS_RISK_CATEGORIES
-  .filter((category) => category !== "file_attach");
+export const DEFAULT_AUTONOMOUS_RISK_CATEGORIES = [
+  "form_submit",
+  "external_navigation"
+] as const satisfies readonly AutonomousRiskCategory[];
+
+/**
+ * Categories that an owner-wide policy may never approve.
+ *
+ * They disclose data, are hard to reverse, affect account security, or use a
+ * lower-confidence visual target. Keeping this as a daemon-side invariant
+ * means a stale policy or a mistaken extension category cannot turn them into
+ * unattended actions.
+ */
+export const ALWAYS_CONFIRM_RISK_CATEGORIES = [
+  "message",
+  "visual_click",
+  "delete",
+  "payment",
+  "security",
+  "password",
+  "2fa",
+  "file_attach"
+] as const satisfies readonly AutonomousRiskCategory[];
+
+const alwaysConfirmCategories: ReadonlySet<string> = new Set<string>(ALWAYS_CONFIRM_RISK_CATEGORIES);
 
 export interface AutonomyPolicy {
   readonly enabled: boolean;
@@ -69,7 +92,7 @@ function parsePolicy(section: Record<string, unknown> | undefined): AutonomyPoli
   const known: ReadonlySet<string> = new Set<string>(AUTONOMOUS_RISK_CATEGORIES);
   const raw = section.categories;
   if (raw === undefined) {
-    return { enabled: true, categories: new Set<string>(DEFAULT_CATEGORIES) };
+    return { enabled: true, categories: new Set<string>(DEFAULT_AUTONOMOUS_RISK_CATEGORIES) };
   }
   if (!Array.isArray(raw) || raw.length === 0) {
     throw new Error(
@@ -82,6 +105,12 @@ function parsePolicy(section: Record<string, unknown> | undefined): AutonomyPoli
       throw new Error(
         `${AUTONOMY_POLICY_SECTION}.categories contains an unknown risk category. ` +
         `Allowed values: ${AUTONOMOUS_RISK_CATEGORIES.join(", ")}.`
+      );
+    }
+    if (alwaysConfirmCategories.has(entry)) {
+      throw new Error(
+        `${AUTONOMY_POLICY_SECTION}.categories cannot make ${entry} autonomous; ` +
+        "that category always requires a per-action human decision."
       );
     }
     categories.add(entry);
@@ -102,6 +131,7 @@ export async function loadAutonomyPolicy(configDir: string): Promise<AutonomyPol
  */
 export function isAutonomousCategory(policy: AutonomyPolicy, category: string | undefined): boolean {
   if (!policy.enabled || typeof category !== "string") return false;
+  if (alwaysConfirmCategories.has(category)) return false;
   return policy.categories.has(category);
 }
 
@@ -109,6 +139,8 @@ export function isAutonomousCategory(policy: AutonomyPolicy, category: string | 
 export function autonomyPolicySummary(policy: AutonomyPolicy): { enabled: boolean; categories: string[] } {
   return {
     enabled: policy.enabled,
-    categories: AUTONOMOUS_RISK_CATEGORIES.filter((category) => policy.categories.has(category))
+    categories: AUTONOMOUS_RISK_CATEGORIES.filter((category) =>
+      !alwaysConfirmCategories.has(category) && policy.categories.has(category)
+    )
   };
 }

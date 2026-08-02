@@ -6,6 +6,14 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- MCP client registrations now launch the exact verified persistent BrowseWeave runtime directly instead of running `npm exec browseweave@latest` for every AI-client session. This removes the npm/cache lookup, shell shim, extra process chain, and network dependency from startup while preserving strict migration rules: only exact older BrowseWeave entries are replaced and foreign entries remain untouched.
+
+### Security
+
+- Owner-wide autonomy now covers only routine form submissions and external navigation. Messaging, visual-coordinate clicks, deletion, payment, account security, passwords, two-factor authentication, and file attachment always require a per-action human decision, even if a stale policy tries to list them. File attachment also preserves the MCP client identity used for managed-tab ownership and has a separate action-level guard against policy approval.
+
 ## [0.1.0-beta.14] - 2026-08-01
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.

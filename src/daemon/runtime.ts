@@ -1421,7 +1421,7 @@ export class BrowseWeaveDaemon {
       return;
     }
     if (request.method === "attach_file") {
-      void this.#handleAttachFile(socket, request.id, session, params);
+      void this.#handleAttachFile(socket, request.id, session, params, clientId);
       return;
     }
     // The identity scopes managed tabs; it is never part of the action's own
@@ -2113,6 +2113,10 @@ export class BrowseWeaveDaemon {
   ): boolean {
     // A revalidation is observational by contract and must never execute.
     if (pending.revalidateOnly) return false;
+    // Attaching a local file always needs an exact, per-file human decision.
+    // Keep this action-level invariant even if an extension ever reports the
+    // wrong risk category for the command.
+    if (pending.action === "attach_file") return false;
     if (!isAutonomousCategory(this.#autonomyPolicy, error.category)) return false;
     // A page that keeps changing its live target must not loop the daemon
     // through unbounded automatic replays.
@@ -2180,7 +2184,8 @@ export class BrowseWeaveDaemon {
     socket: Socket,
     requestId: string,
     session: BrowserSession,
-    params: JsonObject
+    params: JsonObject,
+    clientId?: string
   ): Promise<void> {
     let file: AttachableFile;
     try {
@@ -2234,7 +2239,7 @@ export class BrowseWeaveDaemon {
       undefined,
       undefined,
       0,
-      typeof params.client_id === "string" ? params.client_id : undefined
+      clientId
     );
   }
 

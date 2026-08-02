@@ -18,7 +18,8 @@ import {
   claudeProjectRegistrationState,
   clientSetup,
   codexRegistrationState,
-  defaultMcpLaunchSpec,
+  directMcpLaunchSpec,
+  latestNpmMcpLaunchSpec,
   legacyNpmMcpLaunchSpec,
   mergeCursorConfig,
   mergeOpenCodeConfig,
@@ -84,6 +85,7 @@ const MAX_CAPTURE_BYTES = 2 * 1024 * 1024;
 const CLIENTS = new Set<SupportedMcpClient>(["codex", "claude-code", "cursor", "opencode", "generic"]);
 const PACKAGE_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const CURRENT_CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
+const CURRENT_MCP_PATH = fileURLToPath(new URL("../mcp.js", import.meta.url));
 const resolvedClientExecutables = new Map<ClientExecutableName, Promise<TrustedClientExecutable | undefined>>();
 const availableClientExecutables = new Map<ClientExecutableName, Promise<TrustedClientExecutable | undefined>>();
 
@@ -458,7 +460,7 @@ function persistentRuntimeRoot(): string {
   return path.join(dataHome, "browseweave", "runtime");
 }
 
-/** Exact older BrowseWeave package entries that setup may safely replace with @latest. */
+/** Exact installed BrowseWeave package entries that setup may safely replace. */
 async function installedRuntimeMcpLaunchSpecs(): Promise<McpLaunchSpec[]> {
   const root = persistentRuntimeRoot();
   let entries;
@@ -489,6 +491,25 @@ async function installedRuntimeMcpLaunchSpecs(): Promise<McpLaunchSpec[]> {
     }
   }
   return specs;
+}
+
+/**
+ * Launch the MCP server from the exact package currently running setup.
+ *
+ * Public setup is handed to the persistent per-user installation before this
+ * is called, while `--from-source` intentionally keeps the development build.
+ * The resulting client entry therefore needs no npm lookup, cache shim, shell,
+ * or network access at session startup.
+ */
+async function currentMcpLaunchSpec(): Promise<McpLaunchSpec> {
+  const info = await lstat(CURRENT_MCP_PATH);
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new Error("The installed BrowseWeave MCP entrypoint is unsafe.");
+  }
+  if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
+    throw new Error("The installed BrowseWeave MCP entrypoint has an unexpected owner.");
+  }
+  return directMcpLaunchSpec(process.execPath, CURRENT_MCP_PATH);
 }
 
 async function exactRuntimeCliPath(versionDirectory: string): Promise<string> {
@@ -588,7 +609,9 @@ async function handOffCommandToPersistentInstall(args: readonly string[]): Promi
   try {
     installedCli = await exactRuntimeCliPath(versionDirectory);
   } catch {
-    return false;
+    const needsDurableMcpPath = args[0] === "mcp-add" || args[0] === "mcp-config";
+    if (!needsDurableMcpPath) return false;
+    installedCli = await installPersistentRuntime();
   }
   if (await realpath(installedCli) === await realpath(CURRENT_CLI_PATH)) return false;
   const exitCode = await runCommand(process.execPath, [installedCli, ...args]);
@@ -1385,12 +1408,13 @@ async function resolveInstalledOpenCodeVersion(requestedVersion?: 1 | 2): Promis
 }
 
 async function addMcpClient(client: SupportedMcpClient, requestedOpenCodeVersion?: 1 | 2): Promise<void> {
-  const spec = await defaultMcpLaunchSpec();
+  const spec = await currentMcpLaunchSpec();
   if (client === "generic") {
     throw new Error("Generic clients cannot be edited safely without their exact schema. Use 'browseweave mcp-config generic', review the output, and adapt its command/args entry to the client's official MCP format.");
   }
   const replaceableSpecs = [
     ...await installedRuntimeMcpLaunchSpecs(),
+    await latestNpmMcpLaunchSpec(),
     await legacyNpmMcpLaunchSpec()
   ];
   if (client === "codex" || client === "claude-code") {
@@ -1852,7 +1876,7 @@ export async function main(): Promise<void> {
     const client = parseClient(arg);
     const version = client === "opencode" ? openCodeVersionFlag(rest, true) : undefined;
     if (client !== "opencode" && rest.length > 0) throw new Error(`Unexpected option: ${rest[0]}`);
-    process.stdout.write(serializeClientSetup(clientSetup(client, await defaultMcpLaunchSpec(), version)));
+    process.stdout.write(serializeClientSetup(clientSetup(client, await currentMcpLaunchSpec(), version)));
     return;
   }
   if (command === "mcp-add") {

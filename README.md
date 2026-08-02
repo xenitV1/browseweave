@@ -91,13 +91,15 @@ The same owner-only `policy.json` can therefore pre-authorize whole risk categor
 { "autonomous_actions": { "enabled": true } }
 ```
 
-That covers every detected page-action category: `form_submit`, `message`, `external_navigation`, `visual_click`, `delete`, `payment`, `security`, `password`, and `2fa`. Name a subset to keep the rest behind confirmation:
+That covers only the routine transition categories `form_submit` and `external_navigation`. Ordinary reads, typing, scrolling, same-site navigation, and safe searches already run without a prompt. Actions that disclose data, are hard to reverse, affect account security, or rely on a lower-confidence visual target always require a per-action human decision.
+
+Name a narrower subset if you want only one of the routine transition categories to run unattended:
 
 ```json
-{ "autonomous_actions": { "enabled": true, "categories": ["form_submit", "message", "external_navigation"] } }
+{ "autonomous_actions": { "enabled": true, "categories": ["external_navigation"] } }
 ```
 
-`file_attach` is never included by default because attaching sends a local file from the computer to a website; it is covered only when the owner lists it explicitly.
+`message`, `visual_click`, `delete`, `payment`, `security`, `password`, `2fa`, and `file_attach` cannot be added to this policy. They always stop for an exact human decision. In particular, attaching sends a local file from the computer to a website and can never be approved by a broad owner policy.
 
 What the policy does **not** change:
 
@@ -106,7 +108,7 @@ What the policy does **not** change:
 - The path allowlist, credential handoff, refused surfaces, file-picker and download blocks, managed-tab limits, and untrusted-page-content rules are untouched. Passwords, one-time codes, and payment-card values still cannot be typed through ordinary commands.
 - An unrecognized or absent risk category is never covered, so a future risk class keeps waiting for a human decision instead of inheriting an older policy.
 
-`npx browseweave@0.1.0-beta.14 doctor` reports the policy file path and the categories the running daemon actually loaded. The service also logs the enabled categories at startup. Enabling this is a deliberate trade: the agent will submit, publish, delete, and navigate away without asking first, so keep it to machines and sessions where that is what the owner wants.
+`npx browseweave@0.1.0-beta.14 doctor` reports the policy file path and the categories the running daemon actually loaded. The service also logs the enabled categories at startup. Enabling this is a deliberate trade: the agent may submit a non-sensitive form or navigate to another site without asking first, while the always-confirm categories above remain blocked for a human decision.
 
 BrowseWeave controls permitted content inside ordinary HTTP(S) pages. It does not control browser menus, browser settings pages, extension-store pages, operating-system dialogs, file pickers, hardware security-key dialogs, or other privileged surfaces.
 
@@ -237,7 +239,7 @@ only when the same browser family is already connected and you intentionally
 want to pair another profile. All-browser mode covers browser applications, not
 every profile inside them.
 
-Repeat `--client` to configure any requested combination of `codex`, `claude-code`, `cursor`, and `opencode`. If no client is specified, setup attempts every supported client it detects; explicit flags are safer. Client registration is completed before browser enrollment and launches a trusted npm invocation of `browseweave@latest`. BrowseWeave may replace only an exact older entry from its verified persistent runtime; it preserves unrelated configuration and stops rather than overwriting an ambiguous or foreign `browseweave` entry. For another local stdio MCP client, print a generic entry and adapt it manually to that client's current official schema:
+Repeat `--client` to configure any requested combination of `codex`, `claude-code`, `cursor`, and `opencode`. If no client is specified, setup attempts every supported client it detects; explicit flags are safer. Client registration is completed before browser enrollment and launches the exact verified MCP entrypoint in BrowseWeave's persistent per-user runtime. Session startup does not invoke npm, consult the npm cache, or need network access. BrowseWeave may replace only an exact older npm or verified persistent-runtime entry; it preserves unrelated configuration and stops rather than overwriting an ambiguous or foreign `browseweave` entry. For another local stdio MCP client, print a generic entry and adapt it manually to that client's current official schema:
 
 ```bash
 npx browseweave@0.1.0-beta.14 mcp-config generic
@@ -257,7 +259,7 @@ all-browser mode the browser-specific steps repeat sequentially, while runtime,
 service, and MCP configuration remain shared. The command:
 
 1. installs the npm-bundled BrowseWeave agent guide into `~/.agents/skills/browseweave` for Codex and `~/.claude/skills/browseweave` for Claude Code;
-2. registers every selected MCP client to a trusted `browseweave@latest` npm invocation before browser-owned consent begins;
+2. registers every selected MCP client directly to the exact persistent BrowseWeave runtime before browser-owned consent begins;
 3. installs and verifies the persistent per-user runtime, background service, and narrow native reconnect helper without `sudo`;
 4. opens each selected browser's extension-management screen and a private loopback setup page;
 5. reveals the exact managed extension folder or manifest, in a short visible directory under your home folder, and opens it in your file manager while you complete the browser-required load;
