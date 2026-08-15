@@ -287,7 +287,7 @@ jobs:
           }
           const expectedExtensionPermissions = {
             "firefox-mv2": ["<all_urls>", "tabs", "webNavigation", "storage", "nativeMessaging"],
-            "chromium-mv3": ["tabs", "webNavigation", "storage", "scripting", "nativeMessaging"]
+            "chromium-mv3": ["alarms", "tabs", "webNavigation", "storage", "scripting", "nativeMessaging"]
           };
           for (const [target, expectedPermissions] of Object.entries(expectedExtensionPermissions)) {
             const extensionManifest = JSON.parse(files.get(`extension/dist/${target}/manifest.json`).toString("utf8"));

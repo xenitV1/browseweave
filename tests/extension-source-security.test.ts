@@ -143,6 +143,17 @@ describe("extension security structure", () => {
     expect(ordered(clickCase, ["await guardRisks", "assertRiskTargetsUnchanged", "clickElement"])).toBe(true);
     expect(ordered(typeCase, ["await guardRisks", "assertRiskTargetsUnchanged", "typeIntoElement"])).toBe(true);
     expect(ordered(fillCase, ["prepareFillBatch", "await guardRisks", "assertRiskTargetsUnchanged", "applyPreparedFill"])).toBe(true);
+    // The optional submit step of a composite fill runs the exact click guard
+    // sequence: never a bare activation on a caller-supplied submit ref.
+    const submitBranch = fillCase.slice(fillCase.indexOf("if (payload.submit_ref"));
+    expect(submitBranch.length).toBeGreaterThan(0);
+    expect(ordered(submitBranch, [
+      "elementForRef(payload.submit_ref)",
+      "rejectUnsupportedClickTarget(submitElement)",
+      "await guardRisks",
+      "assertRiskTargetsUnchanged",
+      "clickElement(submitElement"
+    ])).toBe(true);
   });
 
   it("rechecks click targets after pre-click handlers and directly before activation", () => {

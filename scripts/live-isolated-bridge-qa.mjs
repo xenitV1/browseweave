@@ -458,23 +458,26 @@ async function verifyBasicInteraction(browserId, markerTabId) {
   const name = findElement(snapshot, "QA display name", "QA display name");
   const mode = findElement(snapshot, "QA mode", "QA mode", { tag: "select", allowLabelContents: true });
   const confirmation = findElement(snapshot, "QA confirmation", "QA confirmation");
-  await browserCall(browserId, "fill_form", {
+  const submit = findElement(snapshot, "ordinary submit button", "Apply ordinary form");
+  const fill = asRecord(await browserCall(browserId, "fill_form", {
     tab_id: markerTabId,
     frame_id: 0,
     fields: [
       { ref: name.ref, value: "Isolated QA", clear: true },
       { ref: mode.ref, value: "isolated", clear: true },
       { ref: confirmation.ref, value: true, clear: true }
-    ]
-  });
+    ],
+    submit_ref: submit.ref
+  }), "Composite fill and submit");
+  ensure(fill.submitted === true, "The composite fill did not report its submit click.");
   await browserCall(browserId, "wait", {
     tab_id: markerTabId,
     frame_id: 0,
     condition: "text_present",
-    value: "Ordinary form verified",
+    value: "Ordinary form submitted",
     timeout_ms: 5_000
   });
-  mark("MV3/MV2 content connection, compact snapshot, and ordinary form interaction");
+  mark("MV3/MV2 content connection, compact snapshot, and composite fill_form submit");
 
   const screenshot = asRecord(await browserCall(browserId, "screenshot", {
     tab_id: markerTabId,

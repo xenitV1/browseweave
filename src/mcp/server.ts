@@ -640,7 +640,10 @@ const FillFormInputSchema = z
       )
       .min(1)
       .max(30)
-      .describe("Fields and values to fill in order")
+      .describe("Fields and values to fill in order"),
+    submit_ref: ElementRefSchema.describe(
+      "Optional element ref of the form's submit control. After every field is filled, that control is clicked inside the same call. A detected risky submit pauses for confirmation exactly like a separate click, and the live-target check still runs before activation"
+    )
   })
   .strict();
 
@@ -649,7 +652,7 @@ server.registerTool(
   {
     title: "Fill Browser Form",
     description:
-      "Fill up to 30 ordinary form controls in order without submitting the form. Input/change events may trigger site autosave. Password, one-time-code, and payment-card fields are rejected. Use a fresh snapshot first, then a separate click for submit so detected risky submission can pause for review.",
+      "Fill up to 30 ordinary form controls in order. Input/change events may trigger site autosave. Password, one-time-code, and payment-card fields are rejected. Use a fresh snapshot first. Omit submit_ref to fill without submitting; pass submit_ref to click the submit control in the same call, saving a round trip — a detected risky submit still pauses for review.",
     inputSchema: FillFormInputSchema,
     annotations: {
       readOnlyHint: false,

@@ -1753,6 +1753,23 @@ async function execute(request: ContentRequest): Promise<unknown> {
           throw partialFillFailure(error, completedRefs);
         }
       }
+      if (payload.submit_ref !== undefined) {
+        if (typeof payload.submit_ref !== "string" || payload.submit_ref.length < 1) {
+          throw new ContentError("invalid_ref", "The submit_ref must be an element reference string.");
+        }
+        // The submit step is the same click path a separate browser_click takes,
+        // so a detected risky submit still pauses for a fresh approval and a
+        // retry re-runs the batch before spending it.
+        const submitElement = elementForRef(payload.submit_ref);
+        rejectUnsupportedClickTarget(submitElement);
+        const submitTargets = [{ action: "click", element: submitElement }];
+        const submitGuard = await guardRisks(submitTargets, request);
+        assertRiskTargetsUnchanged(submitTargets, submitGuard);
+        const submitResult = clickElement(submitElement, { ref: payload.submit_ref }, () => {
+          assertRiskTargetsUnchanged(submitTargets, submitGuard);
+        });
+        return { filled: results.length, fields: results, submitted: true, submit: submitResult };
+      }
       return { filled: results.length, fields: results };
     }
     case "press": {

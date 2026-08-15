@@ -46,6 +46,7 @@
             <input id="qa-confirm" type="checkbox">
           </label>
         </div>
+        <button id="ordinary-submit" type="button">Apply ordinary form</button>
         <p id="ordinary-status" class="status" aria-live="polite">Ordinary form is waiting</p>
       </section>
 
@@ -86,6 +87,11 @@
         document.getElementById(id).addEventListener("input", updateOrdinaryStatus);
         document.getElementById(id).addEventListener("change", updateOrdinaryStatus);
       }
+      document.getElementById("ordinary-submit").addEventListener("click", () => {
+        if (ordinaryStatus.textContent === "Ordinary form verified") {
+          ordinaryStatus.textContent = "Ordinary form submitted";
+        }
+      });
 
       const credentialStatus = document.getElementById("credential-status");
       const updateCredentialStatus = () => {

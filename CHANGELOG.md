@@ -6,6 +6,18 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.15] - 2026-08-15
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
+### Added
+
+- `browser_fill_form` accepts an optional `submit_ref`: after every field is filled, the referenced submit control is clicked inside the same call. This removes one model round trip from the most common form flow while changing nothing about safety — the submit step runs the exact click path, so a detected risky submit still pauses for a fresh per-action confirmation, the live-target check still runs before activation, and an approved retry re-runs the batch before spending the grant. Without `submit_ref` the tool fills without submitting, exactly as before.
+
+### Fixed
+
+- The release verifier's expected Chromium permission list now includes the `alarms` permission that the MV3 reconnect alarm added. The check in the publish workflow was still pinning the older five-permission set, so every future tagged release would have failed its final permission verification while local checks stayed green.
+
 ### Changed
 
 - MCP client registrations now launch the exact verified persistent BrowseWeave runtime directly instead of running `npm exec browseweave@latest` for every AI-client session. This removes the npm/cache lookup, shell shim, extra process chain, and network dependency from startup while preserving strict migration rules: only exact older BrowseWeave entries are replaced and foreign entries remain untouched.
