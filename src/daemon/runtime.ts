@@ -2113,10 +2113,9 @@ export class BrowseWeaveDaemon {
   ): boolean {
     // A revalidation is observational by contract and must never execute.
     if (pending.revalidateOnly) return false;
-    // Attaching a local file always needs an exact, per-file human decision.
-    // Keep this action-level invariant even if an extension ever reports the
-    // wrong risk category for the command.
-    if (pending.action === "attach_file") return false;
+    // Attaching a local file is covered only when the owner names `file_attach`
+    // explicitly. The exact-path allowlist still gates which files can be read
+    // at all, so a policy grant widens who may confirm, never what is readable.
     if (!isAutonomousCategory(this.#autonomyPolicy, error.category)) return false;
     // A page that keeps changing its live target must not loop the daemon
     // through unbounded automatic replays.

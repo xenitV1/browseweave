@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  ALWAYS_CONFIRM_RISK_CATEGORIES,
   AUTONOMOUS_RISK_CATEGORIES,
   DEFAULT_AUTONOMOUS_RISK_CATEGORIES,
+  EXPLICIT_ONLY_RISK_CATEGORIES,
   DISABLED_AUTONOMY_POLICY,
   autonomyPolicySummary,
   isAutonomousCategory,
@@ -77,12 +77,28 @@ describe("autonomous action policy", () => {
     });
   });
 
-  it("never lets an owner-wide policy authorize a high-risk category", async () => {
-    for (const category of ALWAYS_CONFIRM_RISK_CATEGORIES) {
-      const configDir = await writePolicy({ enabled: true, categories: [category] });
-      await expect(loadAutonomyPolicy(configDir)).rejects.toThrow(/always requires/u);
-      expect(isAutonomousCategory({ enabled: true, categories: new Set([category]) }, category)).toBe(false);
+  it("keeps a high-risk category out of the short policy until it is named", async () => {
+    const short = await loadAutonomyPolicy(await writePolicy({ enabled: true }));
+    for (const category of EXPLICIT_ONLY_RISK_CATEGORIES) {
+      expect(isAutonomousCategory(short, category)).toBe(false);
+      const named = await loadAutonomyPolicy(await writePolicy({ enabled: true, categories: [category] }));
+      expect(isAutonomousCategory(named, category)).toBe(true);
+      expect(autonomyPolicySummary(named)).toEqual({ enabled: true, categories: [category] });
     }
+  });
+
+  it("covers every category when the owner names them all", async () => {
+    const policy = await loadAutonomyPolicy(await writePolicy({
+      enabled: true,
+      categories: [...AUTONOMOUS_RISK_CATEGORIES]
+    }));
+    for (const category of AUTONOMOUS_RISK_CATEGORIES) {
+      expect(isAutonomousCategory(policy, category)).toBe(true);
+    }
+    expect(autonomyPolicySummary(policy)).toEqual({
+      enabled: true,
+      categories: [...AUTONOMOUS_RISK_CATEGORIES]
+    });
   });
 
   it("never covers a missing or unrecognized risk category", async () => {

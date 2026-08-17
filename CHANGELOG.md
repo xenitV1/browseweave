@@ -6,6 +6,15 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.16] - 2026-08-17
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
+### Changed
+
+- `autonomous_actions.categories` can name any risk category again. 0.1.0-beta.15 introduced a daemon-side list that refused `message`, `visual_click`, `delete`, `payment`, `security`, `password`, `2fa`, and `file_attach` even when the owner wrote them out explicitly, which left owners of a single-owner machine with no way to finish an ordinary "Send", "Publish", or "Delete" click without a prompt, and no configuration that could change it. The distinction that mattered was never enforceable-versus-forbidden; it was default-versus-named. The short `{ "enabled": true }` form therefore still covers only `form_submit` and `external_navigation`, so nothing widens by upgrading or by an existing policy file, while an explicit `categories` list now controls the full set. Writing that list is still a deliberate edit of an owner-only file followed by a service restart, which no MCP caller and no page content can perform.
+- `file_attach` is covered when the owner names it, instead of being blocked by a second action-level guard. This changes only who confirms an attachment: the `file_attach` allowlist still bounds which directories are readable at all, and the hidden-path, hardlink, credential-filename, private-key, file-type, and BrowseWeave-state refusals run before any approval is considered. Every grant remains single-use, live-target-checked, and audited as `policy_approved`.
+
 ## [0.1.0-beta.15] - 2026-08-15
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.

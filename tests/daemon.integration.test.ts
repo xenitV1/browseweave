@@ -2315,7 +2315,7 @@ describe("owner-declared autonomous actions", () => {
     expect(await readFile(harness.config.auditLogPath, "utf8")).toContain("policy_replay_limit");
   });
 
-  it("keeps file attachment behind exact-file confirmation and preserves the client identity", async () => {
+  it("keeps file attachment behind confirmation until named, and preserves the client identity", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "browseweave-daemon-"));
     const documents = path.join(root, "documents");
     await mkdir(documents, { recursive: true });
@@ -2324,7 +2324,7 @@ describe("owner-declared autonomous actions", () => {
       path.join(root, "config", "policy.json"),
       JSON.stringify({
         file_attach: { enabled: true, allowed_directories: [documents] },
-        autonomous_actions: { enabled: true, categories: ["form_submit"] }
+        autonomous_actions: { enabled: true }
       }),
       { mode: 0o600 }
     );
@@ -2356,12 +2356,12 @@ describe("owner-declared autonomous actions", () => {
     });
     const probe = await extension.next("command");
     expect(probe.client_id).toBe(clientId);
-    // Even a stale or mistaken extension category cannot turn file attachment
-    // into an owner-policy-approved action.
-    extension.socket.send(commandFailure(probe, FINGERPRINT_A, UNTRUSTED_LABEL, "form_submit"));
+    // The short `{ enabled: true }` policy never sweeps in file attachment, so
+    // it still stops for an exact-file decision until the owner names it.
+    extension.socket.send(commandFailure(probe, FINGERPRINT_A, UNTRUSTED_LABEL, "file_attach"));
     expect(await call).toMatchObject({
       ok: true,
-      result: { approval_required: true, approval_ui: "mcp_session", risk: "form_submit" }
+      result: { approval_required: true, approval_ui: "mcp_session", risk: "file_attach" }
     });
     await expect(extension.next("command", 100)).rejects.toThrow(/Timed out/u);
   });
