@@ -6,6 +6,10 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0-beta.17] - 2026-08-18
+
+Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
+
 ### Changed
 
 - The agent skill now tells the model to reach a page by searching rather than by navigating to a URL it recalled. A remembered deep link describes a site as it was in training data, so it lands on moved or nonexistent pages and limits the task to what the model already knew; searching reads the live web and surfaces sources it would not have listed. Typing the query into the search engine's own box is the default, with direct navigation reserved for a URL the user supplied, one just read on the page, or a site's own entry point. `browser_navigate`'s tool description carries the same rule, so it applies even in a session that never loads the skill.
