@@ -652,7 +652,7 @@ server.registerTool(
   {
     title: "Fill Browser Form",
     description:
-      "Fill up to 30 ordinary form controls in order. Input/change events may trigger site autosave. Password, one-time-code, and payment-card fields are rejected. Use a fresh snapshot first. Omit submit_ref to fill without submitting; pass submit_ref to click the submit control in the same call, saving a round trip — a detected risky submit still pauses for review.",
+      "Fill up to 30 ordinary form controls in one call. Prefer this over a browser_type sequence whenever a page has more than one field to fill. Input/change events may trigger site autosave. Password, one-time-code, and payment-card fields are rejected. Use a fresh snapshot first. Omit submit_ref to fill without submitting; pass submit_ref to click the submit control in the same call, saving a round trip — a detected risky submit still pauses for review.",
     inputSchema: FillFormInputSchema,
     annotations: {
       readOnlyHint: false,
@@ -1045,7 +1045,7 @@ server.registerTool(
   {
     title: "Navigate Browser Tab",
     description:
-      "Navigate the active or selected tab to an absolute HTTP(S) URL. This can discard unsaved page input. javascript:, data:, file:, extension, and privileged browser URLs are blocked.",
+      "Navigate the active or selected tab to an absolute HTTP(S) URL. Use a URL the user gave you, one you just read on the page, or a site's own entry point; for anything more specific, search for the page instead of navigating to a URL you recalled, which is often stale. This can discard unsaved page input. javascript:, data:, file:, extension, and privileged browser URLs are blocked.",
     inputSchema: NavigateInputSchema,
     annotations: {
       readOnlyHint: false,
