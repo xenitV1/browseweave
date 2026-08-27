@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { NATIVE_SETUP_HOST_NAME } from "./setup-protocol.js";
+import {
+  chromeFlatpakManifestPath,
+  chromeFlatpakWrapperPath,
+  managedChromeFlatpakWrapperContent,
+  isManagedChromeFlatpakWrapper
+} from "./chrome-flatpak.js";
 
 export const NATIVE_HOST_DESCRIPTION = "BrowseWeave secure local setup bridge" as const;
 export const NATIVE_HOST_LAUNCHER_MARKER =
@@ -51,6 +57,15 @@ export interface NativeHostLauncherPlan {
   readonly nativeHostScriptPath: string;
 }
 
+/** The sandbox-side wrapper that forwards Chrome Flatpak to the host launcher. */
+export interface ChromeFlatpakWrapperPlan {
+  readonly path: string;
+  readonly content: string;
+  readonly mode: 0o700;
+  /** The host-side POSIX launcher the wrapper spawns through flatpak-spawn. */
+  readonly hostLauncherPath: string;
+}
+
 /** A per-user default-value registration. No machine-wide registry write is planned. */
 export interface WindowsNativeHostRegistrySpec {
   readonly hive: "HKEY_CURRENT_USER";
@@ -66,6 +81,8 @@ export interface NativeHostRegistrationPlan {
   /** POSIX launcher path or the supplied fixed Windows executable path. */
   readonly hostExecutablePath: string;
   readonly launcher?: NativeHostLauncherPlan;
+  /** Present only when the Chrome registration targets the Flatpak sandbox. */
+  readonly chromeFlatpakWrapper?: ChromeFlatpakWrapperPlan;
   readonly manifests: readonly NativeHostManifestPlan[];
   readonly windowsRegistry: readonly WindowsNativeHostRegistrySpec[];
 }
@@ -84,6 +101,8 @@ export interface NativeHostRegistrationPlanInput {
   readonly firefoxExtensionIds: readonly string[];
   /** Omit to leave Google Chrome unregistered. An empty array is invalid. */
   readonly chromiumExtensionOrigins?: readonly string[];
+  /** Register Chrome's manifest inside the Flatpak sandbox locations instead. */
+  readonly chromeFlatpak?: boolean;
 }
 
 function sha256(value: string): string {
@@ -319,6 +338,36 @@ function posixPlan(
     createManifestPlan("firefox", firefoxManifestPath, launcherPath, firefoxIds, platform)
   ];
   if (chromeOrigins) {
+    if (input.chromeFlatpak) {
+      if (platform !== "linux") {
+        throw new Error("Chrome Flatpak native messaging registration is available on Linux only.");
+      }
+      const wrapperPath = chromeFlatpakWrapperPath(input.home);
+      const chromeFlatpakWrapper: ChromeFlatpakWrapperPlan = Object.freeze({
+        path: wrapperPath,
+        content: managedChromeFlatpakWrapperContent(launcherPath),
+        mode: 0o700 as const,
+        hostLauncherPath: launcherPath
+      });
+      manifests.push(
+        createManifestPlan(
+          "chrome",
+          chromeFlatpakManifestPath(input.home),
+          wrapperPath,
+          chromeOrigins,
+          platform
+        )
+      );
+      return Object.freeze({
+        platform,
+        hostName: NATIVE_SETUP_HOST_NAME,
+        hostExecutablePath: launcherPath,
+        launcher,
+        chromeFlatpakWrapper,
+        manifests: Object.freeze(manifests),
+        windowsRegistry: Object.freeze([])
+      });
+    }
     const chromeManifestPath = platform === "linux"
       ? path.posix.join(
           input.home,
@@ -354,6 +403,9 @@ function windowsPlan(
   chromeOrigins: readonly string[] | undefined
 ): NativeHostRegistrationPlan {
   assertCanonicalWindowsPath(input.home, "User home");
+  if (input.chromeFlatpak) {
+    throw new Error("Chrome Flatpak native messaging registration is not available on Windows.");
+  }
   if (input.nodePath !== undefined || input.nativeHostScriptPath !== undefined) {
     throw new Error("Windows native messaging requires the fixed executable host, not Node or a script wrapper.");
   }
@@ -449,6 +501,16 @@ export function nativeHostManifestState(
 ): Exclude<NativeHostArtifactState, "owned"> {
   if (content === undefined) return "absent";
   return content === expected.content ? "exact" : "foreign";
+}
+
+/** The sandbox wrapper is trusted byte-exact or by its own managed marker. */
+export function chromeFlatpakWrapperState(
+  expected: ChromeFlatpakWrapperPlan,
+  content: string | undefined
+): NativeHostArtifactState {
+  if (content === undefined) return "absent";
+  if (content === expected.content) return "exact";
+  return isManagedChromeFlatpakWrapper(content, expected.hostLauncherPath) ? "owned" : "foreign";
 }
 
 /** Windows registration is trusted only when every default-value field matches exactly. */

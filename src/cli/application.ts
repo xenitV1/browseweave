@@ -77,6 +77,13 @@ import {
 import { installNativeHostRegistration, uninstallNativeHostRegistration } from "../native/host-install.js";
 import { discoverLocalChromiumExtensionOrigins } from "../setup/chromium-extension-discovery.js";
 import { configureZenFlatpakNativeMessaging } from "../setup/zen-flatpak.js";
+import {
+  CHROME_FLATPAK_APP_ID,
+  CHROME_FLATPAK_SPAWN_GRANT_COMMAND,
+  chromeFlatpakExtensionParentPath,
+  chromeFlatpakSessionBusPolicy,
+  chromeFlatpakUserDataPath
+} from "../native/chrome-flatpak.js";
 import { purgeOwnedApplicationDirectories } from "../native/purge-data.js";
 import { browserLaunchEnvironment } from "../setup/browser-environment.js";
 import { installBundledAgentSkills } from "../setup/skill-install.js";
@@ -103,7 +110,7 @@ function usage(): string {
   return `BrowseWeave ${APP_VERSION}
 
 Usage:
-  npx browseweave@${APP_VERSION} setup [--browser chrome|zen | --all-browsers] [--browser-path <absolute-path>] [--new-profile] [--client <name>] [--opencode-v1|--opencode-v2]
+  npx browseweave@${APP_VERSION} setup [--browser chrome|zen|firefox | --all-browsers] [--browser-path <absolute-path>] [--new-profile] [--client <name>] [--opencode-v1|--opencode-v2]
   npx browseweave@${APP_VERSION} doctor
   npx browseweave@${APP_VERSION} service-install
   npx browseweave@${APP_VERSION} service-uninstall
@@ -285,6 +292,13 @@ interface BrowserLauncher {
   command: string;
   prefixArgs: string[];
   zenFlatpak?: boolean;
+  chromeFlatpak?: boolean;
+}
+
+function setupBrowserLabel(target: SetupBrowserTarget): string {
+  if (target === "chrome") return "Google Chrome";
+  if (target === "zen") return "Zen Browser";
+  return "Mozilla Firefox";
 }
 
 const SETUP_CLIENTS = new Set<Exclude<SupportedMcpClient, "generic">>([
@@ -308,7 +322,9 @@ function parseSetupOptions(args: string[]): SetupOptions {
     if (argument === "--browser") {
       if (browserSeen) throw new Error("Choose --browser only once.");
       const value = args[index + 1];
-      if (value !== "chrome" && value !== "zen") throw new Error("--browser must be chrome or zen.");
+      if (value !== "chrome" && value !== "zen" && value !== "firefox") {
+        throw new Error("--browser must be chrome, zen, or firefox.");
+      }
       browserTarget = value;
       browserSeen = true;
       index += 1;
@@ -358,7 +374,7 @@ function parseSetupOptions(args: string[]): SetupOptions {
     throw new Error(`Unexpected setup option: ${argument}`);
   }
   if (browserPath !== undefined && browserTarget === undefined) {
-    throw new Error("Use --browser chrome or --browser zen together with --browser-path.");
+    throw new Error("Use --browser chrome, zen, or firefox together with --browser-path.");
   }
   if (allDetectedBrowsers && browserTarget !== undefined) {
     throw new Error("Choose either --all-browsers or one explicit --browser target.");
@@ -412,6 +428,34 @@ function assertManagedSetupEnvironment(): string {
  */
 function managedExtensionParent(): string {
   return managedExtensionParentPath(assertManagedSetupEnvironment(), process.platform);
+}
+
+function chromeFlatpakExtensionParent(): string {
+  return chromeFlatpakExtensionParentPath(nativeAccountHome());
+}
+
+function chromeFlatpakManagedExtensionPath(): string {
+  return path.join(chromeFlatpakExtensionParent(), "chromium-mv3");
+}
+
+async function chromeFlatpakInstalledProfileRoot(): Promise<string | undefined> {
+  const root = chromeFlatpakUserDataPath(nativeAccountHome());
+  try {
+    const info = await lstat(root);
+    return info.isDirectory() && !info.isSymbolicLink() ? root : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function chromeFlatpakSpawnPermissionGranted(flatpakCommand: string): Promise<boolean> {
+  const results = await Promise.all([
+    runCaptured(flatpakCommand, ["override", "--user", "--show", CHROME_FLATPAK_APP_ID]).catch(() => undefined),
+    runCaptured(flatpakCommand, ["info", "--show-metadata", CHROME_FLATPAK_APP_ID]).catch(() => undefined)
+  ]);
+  return results.some((result) =>
+    result?.code === 0 && chromeFlatpakSessionBusPolicy(result.stdout).spawnHostGranted
+  );
 }
 
 /** The pre-relocation location, cleaned up so two enabled copies cannot coexist. */
@@ -646,7 +690,7 @@ async function detectBrowserLaunchers(
   allDetected = false
 ): Promise<BrowserLauncher[]> {
   if (customExecutable !== undefined) {
-    if (!requested) throw new Error("A custom browser path requires an explicit chrome or zen target.");
+    if (!requested) throw new Error("A custom browser path requires an explicit chrome, zen, or firefox target.");
     const resolved = await realpath(customExecutable).catch(() => undefined);
     if (!resolved || /[\0\r\n]/u.test(resolved)) throw new Error("The custom browser executable could not be resolved safely.");
     const info = await lstat(resolved);
@@ -655,7 +699,7 @@ async function detectBrowserLaunchers(
     }
     return [{
       target: requested,
-      label: requested === "chrome" ? "Google Chrome" : "Zen Browser",
+      label: setupBrowserLabel(requested),
       command: resolved,
       prefixArgs: []
     }];
@@ -678,6 +722,18 @@ async function detectBrowserLaunchers(
         break;
       }
     }
+    const flatpakChrome = installedFlatpak
+      ? await runCaptured(installedFlatpak, ["info", CHROME_FLATPAK_APP_ID]).catch(() => undefined)
+      : undefined;
+    if (installedFlatpak && flatpakChrome?.code === 0) {
+      candidates.push({
+        target: "chrome",
+        label: "Google Chrome",
+        command: installedFlatpak,
+        prefixArgs: ["run", CHROME_FLATPAK_APP_ID],
+        chromeFlatpak: true
+      });
+    }
     const flatpakZen = installedFlatpak
       ? await runCaptured(installedFlatpak, ["info", "app.zen_browser.zen"]).catch(() => undefined)
       : undefined;
@@ -689,6 +745,12 @@ async function detectBrowserLaunchers(
         prefixArgs: ["run", "app.zen_browser.zen"],
         zenFlatpak: true
       });
+    }
+    for (const executable of ["/usr/bin/firefox", "/usr/bin/firefox-esr", "/usr/local/bin/firefox"]) {
+      if (await accessibleFile(executable)) {
+        candidates.push({ target: "firefox", label: "Mozilla Firefox", command: executable, prefixArgs: [] });
+        break;
+      }
     }
   } else if (process.platform === "darwin") {
     const chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -705,6 +767,10 @@ async function detectBrowserLaunchers(
         break;
       }
     }
+    const firefox = "/Applications/Firefox.app/Contents/MacOS/firefox";
+    if (await accessibleFile(firefox)) {
+      candidates.push({ target: "firefox", label: "Mozilla Firefox", command: firefox, prefixArgs: [] });
+    }
   } else if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA || path.join(homedir(), "AppData", "Local");
     const programFiles = process.env.PROGRAMFILES || "C:\\Program Files";
@@ -718,6 +784,11 @@ async function detectBrowserLaunchers(
       path.join(localAppData, "Programs", "Zen Browser", "zen.exe"),
       path.join(programFiles, "Zen Browser", "zen.exe")
     ];
+    const firefoxCandidates = [
+      path.join(programFiles, "Mozilla Firefox", "firefox.exe"),
+      path.join(programFilesX86, "Mozilla Firefox", "firefox.exe"),
+      path.join(localAppData, "Mozilla Firefox", "firefox.exe")
+    ];
     for (const chrome of chromeCandidates) {
       if (await accessibleFile(chrome)) {
         candidates.push({ target: "chrome", label: "Google Chrome", command: chrome, prefixArgs: [] });
@@ -730,11 +801,17 @@ async function detectBrowserLaunchers(
         break;
       }
     }
+    for (const firefox of firefoxCandidates) {
+      if (await accessibleFile(firefox)) {
+        candidates.push({ target: "firefox", label: "Mozilla Firefox", command: firefox, prefixArgs: [] });
+        break;
+      }
+    }
   }
 
   if (allDetected) {
     if (candidates.length === 0) {
-      throw new Error("Google Chrome or Zen Browser was not found in a supported installation location.");
+      throw new Error("Google Chrome, Zen Browser, or Mozilla Firefox was not found in a supported installation location.");
     }
     return candidates;
   }
@@ -744,8 +821,8 @@ async function detectBrowserLaunchers(
     : candidates.find((candidate) => candidate.target === "chrome") ?? candidates[0];
   if (!selected) {
     throw new Error(requested
-      ? `${requested === "chrome" ? "Google Chrome" : "Zen Browser"} was not found in a supported installation location.`
-      : "Google Chrome or Zen Browser was not found in a supported installation location.");
+      ? `${setupBrowserLabel(requested)} was not found in a supported installation location.`
+      : "Google Chrome, Zen Browser, or Mozilla Firefox was not found in a supported installation location.");
   }
   return [selected];
 }
@@ -1096,26 +1173,54 @@ async function nativeHostAccountHome(): Promise<string> {
   return nativeAccountHome();
 }
 
-async function installNativeHost(requiredBrowser?: SetupBrowserTarget): Promise<void> {
+async function installNativeHost(
+  requiredBrowser?: SetupBrowserTarget,
+  chromeFlatpak = false
+): Promise<void> {
   const home = await nativeHostAccountHome();
-  let localChromeOrigins: readonly string[] | undefined;
+  let defaultChromeOrigins: readonly string[] | undefined;
+  let flatpakChromeOrigins: readonly string[] | undefined;
   if (!CHROMIUM_EXTENSION_ORIGIN) {
-    const deadline = Date.now() + (requiredBrowser === "chrome" ? 10_000 : 0);
+    const waitForDiscovery = requiredBrowser === "chrome";
+    const flatpakRoot = waitForDiscovery && !chromeFlatpak
+      ? undefined
+      : await chromeFlatpakInstalledProfileRoot();
+    const deadline = Date.now() + (waitForDiscovery ? 10_000 : 0);
     do {
-      localChromeOrigins = await discoverLocalChromiumExtensionOrigins();
-      if (localChromeOrigins.length > 0 || requiredBrowser !== "chrome" || Date.now() >= deadline) break;
+      defaultChromeOrigins = chromeFlatpak
+        ? undefined
+        : await discoverLocalChromiumExtensionOrigins();
+      flatpakChromeOrigins = flatpakRoot
+        ? await discoverLocalChromiumExtensionOrigins({
+            chromeUserData: flatpakRoot,
+            additionalManagedExtensionPaths: [chromeFlatpakManagedExtensionPath()]
+          })
+        : undefined;
+      const found = (defaultChromeOrigins?.length ?? 0) > 0 || (flatpakChromeOrigins?.length ?? 0) > 0;
+      if (found || !waitForDiscovery || Date.now() >= deadline) break;
       await new Promise((resolve) => globalThis.setTimeout(resolve, 250));
     } while (true);
-    if (requiredBrowser === "chrome" && localChromeOrigins.length === 0) {
+    if (waitForDiscovery && (defaultChromeOrigins?.length ?? 0) === 0 && (flatpakChromeOrigins?.length ?? 0) === 0) {
       throw new Error(
         "Google Chrome connected, but its exact unpacked extension identity was not saved yet. " +
         "Keep Chrome open and run setup again; BrowseWeave will not use a wildcard native-host permission."
       );
     }
   }
-  const plan = currentNativeHostRegistrationPlan(process.platform, localChromeOrigins);
-  await installNativeHostRegistration(plan, home);
-  process.stdout.write(`BrowseWeave native setup helper installed for ${plan.manifests.map(({ browser }) => browser).join(", ")}.\n`);
+  if (defaultChromeOrigins !== undefined || flatpakChromeOrigins === undefined) {
+    const plan = currentNativeHostRegistrationPlan(process.platform, defaultChromeOrigins);
+    await installNativeHostRegistration(plan, home);
+    process.stdout.write(
+      `BrowseWeave native setup helper installed for ${plan.manifests.map(({ browser }) => browser).join(", ")}.\n`
+    );
+  }
+  if (flatpakChromeOrigins !== undefined && flatpakChromeOrigins.length > 0) {
+    const plan = currentNativeHostRegistrationPlan(process.platform, flatpakChromeOrigins, true);
+    await installNativeHostRegistration(plan, home);
+    process.stdout.write(
+      `BrowseWeave native setup helper installed for ${plan.manifests.map(({ browser }) => browser).join(", ")} (Chrome Flatpak).\n`
+    );
+  }
 }
 
 async function uninstallNativeHost(): Promise<void> {
@@ -1125,6 +1230,15 @@ async function uninstallNativeHost(): Promise<void> {
     : await discoverLocalChromiumExtensionOrigins();
   const plan = currentNativeHostRegistrationPlan(process.platform, localChromeOrigins);
   await uninstallNativeHostRegistration(plan, home);
+  const flatpakRoot = CHROMIUM_EXTENSION_ORIGIN ? undefined : await chromeFlatpakInstalledProfileRoot();
+  if (flatpakRoot) {
+    const flatpakOrigins = await discoverLocalChromiumExtensionOrigins({
+      chromeUserData: flatpakRoot,
+      additionalManagedExtensionPaths: [chromeFlatpakManagedExtensionPath()]
+    });
+    const flatpakPlan = currentNativeHostRegistrationPlan(process.platform, flatpakOrigins, true);
+    await uninstallNativeHostRegistration(flatpakPlan, home);
+  }
   process.stdout.write("BrowseWeave native setup helper removed. Browser pairing data was preserved.\n");
 }
 
@@ -1153,32 +1267,45 @@ async function localInstall(): Promise<void> {
  */
 async function refreshManagedExtensions(): Promise<void> {
   const parent = managedExtensionParent();
-  const targets = [["chrome", "chromium-mv3"], ["zen", "firefox-mv2"]] as const;
-  for (const [browser, target] of targets) {
-    const destination = path.join(parent, target);
-    try {
-      const info = await lstat(destination);
-      if (!info.isDirectory() || info.isSymbolicLink()) continue;
-    } catch {
-      continue;
-    }
-    try {
-      await prepareManagedExtension({
-        sourcePath: await resolveExtensionPath(browser),
-        stableParent: parent,
-        target,
-        version: APP_VERSION
-      });
-      process.stdout.write(
-        `BrowseWeave ${target} extension files are at ${APP_VERSION} (${destination}). ` +
-        "Reload the extension in that browser so it stops running the previous build.\n"
-      );
-    } catch (error) {
-      // A repair that fixed the service should not be undone by one unreadable
-      // or locally modified copy, but it must say so rather than look complete.
-      process.stdout.write(
-        `BrowseWeave could not refresh the ${target} extension copy: ${describeError(error)}\n`
-      );
+  // Zen and Firefox share the firefox-mv2 extension build, so refresh runs per
+  // extension target, not per browser, and never processes one folder twice.
+  const targets = [["chrome", "chromium-mv3"], ["firefox", "firefox-mv2"]] as const;
+  const flatpakParent = chromeFlatpakExtensionParent();
+  let chromeFlatpakParentExists = false;
+  try {
+    const info = await lstat(flatpakParent);
+    chromeFlatpakParentExists = info.isDirectory() && !info.isSymbolicLink();
+  } catch {
+    chromeFlatpakParentExists = false;
+  }
+  const parents = chromeFlatpakParentExists ? [parent, flatpakParent] : [parent];
+  for (const parentDirectory of parents) {
+    for (const [browser, target] of targets) {
+      const destination = path.join(parentDirectory, target);
+      try {
+        const info = await lstat(destination);
+        if (!info.isDirectory() || info.isSymbolicLink()) continue;
+      } catch {
+        continue;
+      }
+      try {
+        await prepareManagedExtension({
+          sourcePath: await resolveExtensionPath(browser),
+          stableParent: parentDirectory,
+          target,
+          version: APP_VERSION
+        });
+        process.stdout.write(
+          `BrowseWeave ${target} extension files are at ${APP_VERSION} (${destination}). ` +
+          "Reload the extension in that browser so it stops running the previous build.\n"
+        );
+      } catch (error) {
+        // A repair that fixed the service should not be undone by one unreadable
+        // or locally modified copy, but it must say so rather than look complete.
+        process.stdout.write(
+          `BrowseWeave could not refresh the ${target} extension copy: ${describeError(error)}\n`
+        );
+      }
     }
   }
 }
@@ -1199,15 +1326,16 @@ async function localUninstall(purgeData = false): Promise<void> {
   await uninstallService();
   if (!purgeData) return;
   const runtimePaths = getRuntimePaths();
-  const targets = [
+  const purgeTargets = [
     runtimePaths.configDir,
     runtimePaths.stateDir,
     runtimePaths.runtimeDir,
     path.dirname(persistentRuntimeRoot()),
     managedExtensionParent(),
+    ...(await chromeFlatpakInstalledProfileRoot() ? [chromeFlatpakExtensionParent()] : []),
     ...(runtimePaths.legacyTokenPath ? [path.dirname(runtimePaths.legacyTokenPath)] : [])
   ];
-  const removed = await purgeOwnedApplicationDirectories(targets);
+  const removed = await purgeOwnedApplicationDirectories(purgeTargets);
   process.stdout.write(
     `BrowseWeave local data purged from ${removed.length} application ${removed.length === 1 ? "directory" : "directories"}. ` +
     "Remove the browser extension separately to clear its browser-owned storage.\n"
@@ -1564,11 +1692,12 @@ async function setupBrowser(input: {
   baseline: readonly SetupBrowserStatus[];
 }): Promise<SetupBrowserStatus> {
   const { launcher } = input;
+  const chromeFlatpak = launcher.chromeFlatpak === true;
   const packagedExtensionPath = await resolveExtensionPath(launcher.target);
   const extensionTarget = launcher.target === "chrome" ? "chromium-mv3" : "firefox-mv2";
   const extensionPath = await prepareManagedExtension({
     sourcePath: packagedExtensionPath,
-    stableParent: managedExtensionParent(),
+    stableParent: chromeFlatpak ? chromeFlatpakExtensionParent() : managedExtensionParent(),
     target: extensionTarget,
     version: APP_VERSION
   });
@@ -1697,7 +1826,20 @@ async function setupBrowser(input: {
   // Initial enrollment uses the private local setup page. Register the native
   // reconnect helper only after the browser has saved the exact extension
   // identity, so a fresh unpacked Chrome installation never needs a wildcard.
-  await installNativeHost(launcher.target);
+  await installNativeHost(launcher.target, chromeFlatpak);
+  if (chromeFlatpak) {
+    const granted = await chromeFlatpakSpawnPermissionGranted(launcher.command);
+    if (!granted) {
+      process.stdout.write(
+        "Chrome's Flatpak sandbox cannot start BrowseWeave's reconnect helper yet. " +
+        `Grant that once yourself, then fully restart Chrome:\n  ${CHROME_FLATPAK_SPAWN_GRANT_COMMAND}\n` +
+        "That permission lets sandboxed Chrome start local helper commands on this computer. " +
+        "Today's connection already works without it; only the browser's own reconnect step needs it.\n"
+      );
+    } else {
+      process.stdout.write("Chrome Flatpak reconnect permission already granted. Fully restart Chrome once before using the reconnect helper.\n");
+    }
+  }
   if (launcher.zenFlatpak) {
     const portal = await configureZenFlatpakNativeMessaging({ home: nativeAccountHome() });
     if (portal.status === "configured") {

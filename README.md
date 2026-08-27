@@ -10,9 +10,9 @@
 
 BrowseWeave lets local MCP-compatible AI clients use the web pages already open in your real browser. It gives the model a compact semantic view for routine work, a screenshot only when visual inspection matters, and controlled interaction with ordinary HTTP(S) pages.
 
-The MCP transport is client-neutral. Automatic configuration is currently implemented for Codex, Claude Code, Cursor, and OpenCode; other local stdio MCP clients require a manually reviewed command/args entry. The browser preview is deliberately limited to Google Chrome and Zen.
+The MCP transport is client-neutral. Automatic configuration is currently implemented for Codex, Claude Code, Cursor, and OpenCode; other local stdio MCP clients require a manually reviewed command/args entry. The browser preview is deliberately limited to Google Chrome, Zen, and Firefox; on Linux, Chrome may be a native or Flatpak installation.
 
-> **Linux developer preview:** `0.1.0-beta.17` is intended for explicit, version-pinned beta installation on a systemd-based Linux desktop with working `systemctl --user`. Chrome uses a user-loaded unpacked extension. Zen uses an unsigned temporary add-on. The maintainer has live-connected both browsers on that Linux environment, but clean-machine release verification remains a gate. macOS is implemented and CI-tested but not live-verified. Windows setup, non-systemd Linux service managers, Safari, and browser-store installation are unavailable.
+> **Linux developer preview:** `0.1.0-beta.17` is intended for explicit, version-pinned beta installation on a systemd-based Linux desktop with working `systemctl --user`. Chrome uses a user-loaded unpacked extension, including the Flatpak installation, whose managed copy lives inside Chrome's sandbox directory and whose reconnect helper additionally needs the owner-granted one-time `flatpak override --user --talk-name=org.freedesktop.Flatpak com.google.Chrome` permission. Zen and Firefox use an unsigned temporary add-on. The maintainer has live-connected Chrome and Zen on that Linux environment, and Firefox and Chrome Flatpak support are new and CLI-tested but not yet live-verified; clean-machine release verification remains a gate. macOS is implemented and CI-tested but not live-verified. Windows setup, non-systemd Linux service managers, Safari, and browser-store installation are unavailable.
 >
 > Install the npm beta from the exact version shown below. It is published under the `beta` dist-tag; the documentation does not use an unpinned `latest` install. Chrome Web Store and Mozilla Add-ons listings remain unavailable.
 
@@ -192,7 +192,7 @@ Edge, Brave, Vivaldi, Firefox, Safari, remote MCP transports, and hosted browser
 
 ## Guided beta setup
 
-Prerequisites: a systemd-based Linux desktop where `systemctl --user` works, Node.js 22.14.0 or newer, a visible interactive terminal, and Chrome 116+ or a Zen release based on Firefox 142+. Non-systemd distributions are not supported by this beta installer. The command deliberately refuses a background pipe or hidden non-interactive shell because the browser consent must remain visible.
+Prerequisites: a systemd-based Linux desktop where `systemctl --user` works, Node.js 22.14.0 or newer, a visible interactive terminal, and Chrome 116+, a Zen release, or Firefox 142+ installed in a standard location. Non-systemd distributions are not supported by this beta installer. The command deliberately refuses a background pipe or hidden non-interactive shell because the browser consent must remain visible.
 
 ### Install globally from npm
 
@@ -209,6 +209,7 @@ The global command also supports targeted setup and diagnostics without `npx`:
 ```bash
 browseweave setup --browser chrome --client codex
 browseweave setup --browser zen --client claude-code --client cursor
+browseweave setup --browser firefox --client opencode
 browseweave doctor
 browseweave mcp-config generic
 ```
@@ -244,8 +245,9 @@ npx browseweave@0.1.0-beta.17 setup --browser chrome --client opencode --opencod
 ```
 
 `--all-browsers` detects all currently supported installed browser applications
-(Google Chrome and Zen) and prepares each one in sequence. It cannot be combined
-with `--browser` or `--browser-path`. `--browser` accepts `chrome` or `zen`; if
+(Google Chrome, Zen, and Firefox; a native and a Flatpak Chrome count as two applications)
+and prepares each one in sequence. It cannot be combined
+with `--browser` or `--browser-path`. `--browser` accepts `chrome`, `zen`, or `firefox`; if
 both browser-selection flags are omitted, setup preserves the single-browser
 behavior and prefers Chrome. For a portable or nonstandard installation, pair
 one explicit browser with a safe absolute `--browser-path`. Use `--new-profile`
@@ -352,10 +354,10 @@ npm run build
 node dist/src/cli.js setup --from-source --browser chrome --client codex
 ```
 
-Use `--browser zen` for Zen and repeat `--client` when testing more than one supported MCP client. The build also creates `extension/dist/chromium-mv3` and `extension/dist/firefox-mv2`; packaged ZIP/XPI artifacts are created by `npm run package:extension`.
+Use `--browser zen` for Zen, `--browser firefox` for Firefox, and repeat `--client` when testing more than one supported MCP client. The build also creates `extension/dist/chromium-mv3` and `extension/dist/firefox-mv2`; packaged ZIP/XPI artifacts are created by `npm run package:extension`.
 
 For a complete source-checkout bootstrap that installs the exact locked npm
-dependencies, builds the project, detects both supported browsers, and configures
+dependencies, builds the project, detects every supported browser, and configures
 all detected clients, run this in a visible terminal:
 
 ```bash
@@ -397,7 +399,7 @@ browseweave local-uninstall
 npm uninstall --global browseweave
 ```
 
-Only when the user explicitly wants those local application directories deleted, add `--purge-data`. Then remove BrowseWeave separately from Chrome or Zen to clear browser-owned extension storage. Purge deliberately preserves Zen's browser-profile portal preference.
+Only when the user explicitly wants those local application directories deleted, add `--purge-data`. Then remove BrowseWeave separately from Chrome, Zen, or Firefox to clear browser-owned extension storage. Purge deliberately preserves Zen's browser-profile portal preference.
 
 ## Human approval and site-respectful operation
 

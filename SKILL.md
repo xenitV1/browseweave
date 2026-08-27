@@ -1,17 +1,17 @@
 ---
 name: browseweave
-description: "Use when installing, repairing, verifying, diagnosing, or safely operating the BrowseWeave systemd-based Linux developer preview with Chrome or Zen and a local MCP client. Do not use for store publication or bypassing site protections."
+description: "Use when installing, repairing, verifying, diagnosing, or safely operating the BrowseWeave systemd-based Linux developer preview with Chrome, Zen, or Firefox and a local MCP client. Do not use for store publication or bypassing site protections."
 compatibility: "systemd-based Linux with working systemctl --user; Node.js 22.14.0+; Google Chrome 116+ or Zen based on Firefox 142+; visible interactive terminal and human browser consent required."
 ---
 
 ## Outcome and boundary
 
-- Produces a verified local BrowseWeave beta installation on a supported systemd-based Linux desktop, an authenticated Chrome or Zen connection, and at least one harmless real MCP read when the selected build supports them.
+- Produces a verified local BrowseWeave beta installation on a supported systemd-based Linux desktop, an authenticated Chrome, Zen, or Firefox connection, and at least one harmless real MCP read when the selected build supports them.
 - Does not own browser-store publication, macOS or Windows release support, operating-system security prompts, account credentials, CAPTCHA or anti-bot challenges, or compatibility claims not verified on the live target.
 
 ## Applicability contract
 
-- Applies when: installing, repairing, connecting, verifying, troubleshooting, or operating the BrowseWeave systemd-based Linux beta with Chrome or Zen and a local MCP client.
+- Applies when: installing, repairing, connecting, verifying, troubleshooting, or operating the BrowseWeave systemd-based Linux beta with Chrome, Zen, or Firefox and a local MCP client.
 - Assumes: the exact public beta package or a trusted source checkout, working `systemctl --user`, Node.js 22.14.0+, a visible interactive terminal/PTY, and a human present for browser-owned consent.
 - Does not apply when: bypassing site protections, controlling privileged browser/operating-system UI, or publishing BrowseWeave to npm or a browser store.
 - Fallback: if the exact browser identity or native executable is unavailable, stop the native reconnect route, state the limitation, and rerun only the verified guided local setup path that keeps the pairing key hidden.
@@ -70,7 +70,7 @@ npx browseweave@0.1.0-beta.17 setup --browser chrome --client opencode --opencod
 - Repeat `--client` for any requested combination of `codex`, `claude-code`, `cursor`, and `opencode`; these are the only automatic client-configuration targets.
 - For OpenCode, treat the installed executable name as authoritative: `opencode` is V1 and `opencode2` is V2. If both or neither are available, ask which generation the user intends and pass exactly one of `--opencode-v1` or `--opencode-v2` together with `--client opencode`.
 - Never infer the OpenCode generation from `mcp.servers`: V1 can legally have a server literally named `servers`. Require BrowseWeave to leave a mixed, mismatched, or foreign configuration unchanged.
-- Ask which browser/client the user wants and pass explicit flags. Use `--all-browsers` only when the user asks for every installed supported browser. Without either browser-selection flag, setup prefers Chrome when both browsers exist; without `--client`, it attempts every supported client it detects.
+- Ask which browser/client the user wants and pass explicit flags. Use `--all-browsers` only when the user asks for every installed supported browser. Without either browser-selection flag, setup prefers Chrome when several browsers exist; without `--client`, it attempts every supported client it detects. Linux Chrome works natively and as a Flatpak; the Flatpak reconnect helper additionally needs the owner-granted one-time `flatpak override --user --talk-name=org.freedesktop.Flatpak com.google.Chrome` permission, which setup prints but never runs itself.
 - Do not run `npm login`. Do not replace setup with a global npm install.
 - Require setup to preserve unrelated client configuration and refuse foreign or ambiguous `browseweave` entries.
 - For another local stdio MCP client, run `npx browseweave@0.1.0-beta.17 mcp-config generic` only after setup, then adapt the command/args entry manually to that client's current official schema. Never claim automatic or verified support for that client.
@@ -217,7 +217,7 @@ Never enter OTP, payment-card, recovery-code, CAPTCHA, WebAuthn, or hardware-key
 
 - For a normal reversible uninstall, run `npx browseweave@0.1.0-beta.17 local-uninstall`. Explain that local configuration, state, runtime files, audit metadata, and the managed extension copy are preserved.
 - Add `--purge-data` only after the user explicitly asks to delete BrowseWeave's local application data and accepts that recovery is not expected. The command removes exact owner-controlled BrowseWeave application directories after uninstalling the service and native registration.
-- Explain that purge cannot remove browser-owned extension storage. The human must remove BrowseWeave separately from Chrome or Zen. The Zen Flatpak portal preference is preserved.
+- Explain that purge cannot remove browser-owned extension storage. The human must remove BrowseWeave separately from Chrome, Zen, or Firefox. The Zen Flatpak portal preference is preserved.
 
 ## Finish and report
 

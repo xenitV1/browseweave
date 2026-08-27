@@ -13,7 +13,11 @@ export interface ChromiumExtensionDiscoveryInput {
   readonly platform?: NodeJS.Platform;
   readonly home?: string;
   readonly chromeUserData?: string;
+  /** Extra per-installation user-data roots, such as the Chrome Flatpak profile. */
+  readonly additionalChromeUserData?: readonly string[];
   readonly expectedExtensionPath?: string;
+  /** Extra exact unpacked paths that may hold the managed extension copy. */
+  readonly additionalManagedExtensionPaths?: readonly string[];
 }
 
 function chromeUserDataPath(platform: NodeJS.Platform, home: string): string {
@@ -74,7 +78,7 @@ async function verifiedUnpackedCandidate(input: {
   readonly id: string;
   readonly value: unknown;
   readonly chromeUserData: string;
-  readonly managedExtensionPath: string;
+  readonly managedExtensionPaths: readonly string[];
   readonly expectedDigest: string;
   readonly platform: NodeJS.Platform;
 }): Promise<string | undefined> {
@@ -92,7 +96,7 @@ async function verifiedUnpackedCandidate(input: {
     !pathApi.isAbsolute(value.path) || normalizedCandidate !== value.path ||
     (
       !isInside(input.chromeUserData, normalizedCandidate, pathApi) &&
-      normalizedCandidate !== input.managedExtensionPath
+      !input.managedExtensionPaths.includes(normalizedCandidate)
     )
   ) return undefined;
   const directoryInfo = await lstat(value.path);
@@ -127,45 +131,52 @@ export async function discoverLocalChromiumExtensionOrigins(
   if (!pathApi.isAbsolute(home) || /[\0\r\n]/u.test(home)) {
     throw new Error("The operating system did not provide a safe user home directory.");
   }
-  const chromeUserData = pathApi.normalize(input.chromeUserData ?? chromeUserDataPath(platform, home));
+  const chromeUserDataRoots = [input.chromeUserData ?? chromeUserDataPath(platform, home)]
+    .concat(input.additionalChromeUserData ?? [])
+    .map((root) => pathApi.normalize(root));
   const expectedExtensionPath = pathApi.normalize(
     input.expectedExtensionPath ?? fileURLToPath(new URL("../../../extension/dist/chromium-mv3/", import.meta.url))
   );
-  const managedExtensionPath = pathApi.normalize(managedChromiumExtensionPath(platform, home));
+  const managedExtensionPaths = [
+    managedChromiumExtensionPath(platform, home),
+    ...(input.additionalManagedExtensionPaths ?? [])
+  ].map((managedPath) => pathApi.normalize(managedPath));
   if (
-    !pathApi.isAbsolute(chromeUserData) || !isInside(home, chromeUserData, pathApi) ||
-    !pathApi.isAbsolute(expectedExtensionPath) || !pathApi.isAbsolute(managedExtensionPath) ||
-    !isInside(home, managedExtensionPath, pathApi)
+    chromeUserDataRoots.some((root) => !pathApi.isAbsolute(root) || !isInside(home, root, pathApi)) ||
+    !pathApi.isAbsolute(expectedExtensionPath) ||
+    managedExtensionPaths.some((managedPath) => !pathApi.isAbsolute(managedPath) || !isInside(home, managedPath, pathApi))
   ) throw new Error("Chrome extension discovery received an unsafe path.");
 
-  let profiles;
-  try {
-    profiles = await readdir(chromeUserData, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
   const expectedDigest = await extensionTreeDigest(expectedExtensionPath);
   const origins = new Set<string>();
-  for (const profile of profiles) {
-    if (!profile.isDirectory() || (profile.name !== "Default" && !/^Profile \d+$/u.test(profile.name))) continue;
-    let preferences: unknown;
+  for (const chromeUserData of chromeUserDataRoots) {
+    let profiles;
     try {
-      preferences = await readOwnerSafeJson(pathApi.join(chromeUserData, profile.name, "Preferences"), platform);
+      profiles = await readdir(chromeUserData, { withFileTypes: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
-    for (const [id, value] of Object.entries(extensionSettings(preferences))) {
-      const origin = await verifiedUnpackedCandidate({
-        id,
-        value,
-        chromeUserData,
-        managedExtensionPath,
-        expectedDigest,
-        platform
-      });
-      if (origin) origins.add(origin);
+    for (const profile of profiles) {
+      if (!profile.isDirectory() || (profile.name !== "Default" && !/^Profile \d+$/u.test(profile.name))) continue;
+      let preferences: unknown;
+      try {
+        preferences = await readOwnerSafeJson(pathApi.join(chromeUserData, profile.name, "Preferences"), platform);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      for (const [id, value] of Object.entries(extensionSettings(preferences))) {
+        const origin = await verifiedUnpackedCandidate({
+          id,
+          value,
+          chromeUserData,
+          managedExtensionPaths,
+          expectedDigest,
+          platform
+        });
+        if (origin) origins.add(origin);
+      }
     }
   }
   if (origins.size > 1) {

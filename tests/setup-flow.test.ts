@@ -86,6 +86,24 @@ describe("one-click local setup page", () => {
     expect(html).toContain('id="browseweave-auto-refresh"');
   });
 
+  it("renders the Firefox setup page with the temporary add-on instruction", () => {
+    const html = setupPageHtml({
+      browser: "firefox",
+      extensionPath: "/tmp/extension",
+      setupId: "b".repeat(24),
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    expect(html).toContain("This page connects Firefox to the BrowseWeave service");
+    expect(html).toContain("In about:debugging, choose Load Temporary Add-on and select manifest.json");
+    expect(html).toContain("Connect this browser");
+    expect(() => setupPageHtml({
+      browser: "waterfox",
+      extensionPath: "/tmp/extension",
+      setupId: "c".repeat(24),
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    })).toThrow(/browser is invalid/iu);
+  });
+
   it("rejects malformed or overlong-lived setup material", async () => {
     expect(() => setupPageHtml({
       browser: "chrome",

@@ -152,4 +152,60 @@ describe("local Chrome extension discovery", () => {
       expectedExtensionPath: value.expected
     })).rejects.toThrow("More than one verified local BrowseWeave Chrome identity");
   });
+
+  it("discovers a Chrome Flatpak profile through its sandbox user-data root", async () => {
+    const value = await fixture();
+    const flatpakChrome = path.join(value.home, ".var", "app", "com.google.Chrome", "config", "google-chrome");
+    await addProfile({
+      chrome: flatpakChrome,
+      expected: value.expected,
+      profile: "Default",
+      id: FIRST_ID
+    });
+    await expect(discoverLocalChromiumExtensionOrigins({
+      platform: process.platform,
+      home: value.home,
+      chromeUserData: flatpakChrome,
+      expectedExtensionPath: value.expected
+    })).resolves.toEqual([`chrome-extension://${FIRST_ID}/`]);
+  });
+
+  it("accepts the managed copy at the Chrome Flatpak extension parent", async () => {
+    const value = await fixture();
+    const flatpakManaged = path.join(value.home, ".var", "app", "com.google.Chrome", "browseweave", "chromium-mv3");
+    await addProfile({
+      chrome: value.chrome,
+      expected: value.expected,
+      profile: "Default",
+      id: FIRST_ID,
+      unpackedPath: flatpakManaged
+    });
+    await expect(discoverLocalChromiumExtensionOrigins({
+      platform: process.platform,
+      home: value.home,
+      chromeUserData: value.chrome,
+      additionalManagedExtensionPaths: [flatpakManaged],
+      expectedExtensionPath: value.expected
+    })).resolves.toEqual([`chrome-extension://${FIRST_ID}/`]);
+    await expect(discoverLocalChromiumExtensionOrigins({
+      platform: process.platform,
+      home: value.home,
+      chromeUserData: value.chrome,
+      expectedExtensionPath: value.expected
+    })).resolves.toEqual([]);
+  });
+
+  it("fails closed when the default and Flatpak roots both hold a verified identity in one scan", async () => {
+    const value = await fixture();
+    const flatpakChrome = path.join(value.home, ".var", "app", "com.google.Chrome", "config", "google-chrome");
+    await addProfile({ chrome: value.chrome, expected: value.expected, profile: "Default", id: FIRST_ID });
+    await addProfile({ chrome: flatpakChrome, expected: value.expected, profile: "Default", id: SECOND_ID });
+    await expect(discoverLocalChromiumExtensionOrigins({
+      platform: process.platform,
+      home: value.home,
+      chromeUserData: value.chrome,
+      additionalChromeUserData: [flatpakChrome],
+      expectedExtensionPath: value.expected
+    })).rejects.toThrow("More than one verified local BrowseWeave Chrome identity");
+  });
 });

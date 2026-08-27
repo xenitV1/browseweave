@@ -7,7 +7,7 @@ export const SETUP_SESSION_TTL_MS = 5 * 60_000;
 export const SETUP_ID_PATTERN = /^[a-f0-9]{24}$/u;
 export const SETUP_SECRET_PATTERN = /^[a-f0-9]{64}$/u;
 
-export type SetupBrowserTarget = "chrome" | "zen";
+export type SetupBrowserTarget = "chrome" | "zen" | "firefox";
 
 /**
  * Stable browser-loaded extension directory shared by setup and Chrome
@@ -354,7 +354,9 @@ export async function prepareManagedExtension(input: {
 
 function assertSetupPageInput(input: SetupPageInput): void {
   if (!SETUP_ID_PATTERN.test(input.setupId)) throw new Error("The setup session ID is invalid.");
-  if (input.browser !== "chrome" && input.browser !== "zen") throw new Error("The setup browser is invalid.");
+  if (input.browser !== "chrome" && input.browser !== "zen" && input.browser !== "firefox") {
+    throw new Error("The setup browser is invalid.");
+  }
   if (!input.extensionPath || /[\0\r\n]/u.test(input.extensionPath)) {
     throw new Error("The extension path is invalid.");
   }
@@ -365,7 +367,7 @@ function assertSetupPageInput(input: SetupPageInput): void {
 /** The normal web page contains only a non-secret session ID. */
 export function setupPageHtml(input: SetupPageInput): string {
   assertSetupPageInput(input);
-  const browserLabel = input.browser === "chrome" ? "Google Chrome" : "Zen";
+  const browserLabel = input.browser === "chrome" ? "Google Chrome" : input.browser === "zen" ? "Zen" : "Firefox";
   const loadStep = input.browser === "chrome"
     ? "In the Extensions tab, enable Developer mode, choose Load unpacked, and select this folder:"
     : "In about:debugging, choose Load Temporary Add-on and select manifest.json inside this folder:";

@@ -71,6 +71,39 @@ describe("public CLI surface", () => {
     expect(result.stderr).toContain("Choose either --all-browsers or one explicit --browser target");
   });
 
+  it("accepts firefox as an explicit setup browser target", () => {
+    const result = spawnSync(process.execPath, [cli, "setup", "--browser", "firefox"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      maxBuffer: 64 * 1024
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("visible interactive terminal");
+    expect(result.stderr).not.toContain("--browser must be");
+  });
+
+  it("rejects an unknown setup browser target with the full accepted list", () => {
+    const result = spawnSync(process.execPath, [cli, "setup", "--browser", "edge"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      maxBuffer: 64 * 1024
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("--browser must be chrome, zen, or firefox.");
+  });
+
+  it("resolves the packaged firefox extension directory on request", () => {
+    const result = spawnSync(process.execPath, [cli, "extension-path", "firefox"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      maxBuffer: 64 * 1024
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toMatch(/firefox-mv2\/$/u);
+  });
+
   it("refuses a duplicate all-browser selection before starting setup", () => {
     const result = spawnSync(process.execPath, [
       cli,

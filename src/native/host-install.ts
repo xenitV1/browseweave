@@ -3,8 +3,10 @@ import { constants as fsConstants } from "node:fs";
 import { chmod, link, lstat, mkdir, open, readFile, rename, rm, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
+  chromeFlatpakWrapperState,
   nativeHostLauncherState,
   nativeHostManifestState,
+  type ChromeFlatpakWrapperPlan,
   type NativeHostLauncherPlan,
   type NativeHostManifestPlan,
   type NativeHostRegistrationPlan
@@ -159,6 +161,23 @@ async function installManifest(home: string, manifest: NativeHostManifestPlan): 
   });
 }
 
+async function installChromeFlatpakWrapper(home: string, wrapper: ChromeFlatpakWrapperPlan): Promise<void> {
+  await ensureOwnedDirectoryChain(home, path.dirname(wrapper.path));
+  const existing = await readOwnedRegularFile(wrapper.path);
+  const state = chromeFlatpakWrapperState(wrapper, existing?.content);
+  if (state === "foreign") throw new Error("A foreign Chrome Flatpak native host wrapper was not overwritten.");
+  if (state === "exact") {
+    if (process.platform !== "win32") await chmod(wrapper.path, wrapper.mode);
+    return;
+  }
+  await writeOwnedArtifact({
+    filePath: wrapper.path,
+    content: wrapper.content,
+    mode: wrapper.mode,
+    ...(existing ? { existing } : {})
+  });
+}
+
 /** Install only exact per-user artifacts; registry registration is handled by the signed Windows installer. */
 export async function installNativeHostRegistration(
   plan: NativeHostRegistrationPlan,
@@ -170,6 +189,7 @@ export async function installNativeHostRegistration(
   }
   if (!plan.launcher) throw new Error("The POSIX native host launcher plan is missing.");
   await installLauncher(home, plan.launcher);
+  if (plan.chromeFlatpakWrapper) await installChromeFlatpakWrapper(home, plan.chromeFlatpakWrapper);
   for (const manifest of plan.manifests) await installManifest(home, manifest);
 }
 
@@ -186,6 +206,12 @@ export async function uninstallNativeHostRegistration(
     const state = nativeHostManifestState(manifest, existing?.content);
     if (state === "foreign") throw new Error(`A foreign ${manifest.browser} native host manifest was not removed.`);
     if (state === "exact") await unlink(manifest.path);
+  }
+  if (plan.chromeFlatpakWrapper) {
+    const existing = await readOwnedRegularFile(plan.chromeFlatpakWrapper.path);
+    const state = chromeFlatpakWrapperState(plan.chromeFlatpakWrapper, existing?.content);
+    if (state === "foreign") throw new Error("A foreign Chrome Flatpak native host wrapper was not removed.");
+    if (state === "exact" || state === "owned") await unlink(plan.chromeFlatpakWrapper.path);
   }
   if (plan.launcher) {
     const existing = await readOwnedRegularFile(plan.launcher.path);

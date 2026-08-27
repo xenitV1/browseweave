@@ -31,7 +31,8 @@ export function currentNativeHostRegistrationPlan(
   platform: NodeJS.Platform = process.platform,
   chromiumExtensionOrigins: readonly string[] | undefined = CHROMIUM_EXTENSION_ORIGIN
     ? [CHROMIUM_EXTENSION_ORIGIN]
-    : undefined
+    : undefined,
+  chromeFlatpak = false
 ): NativeHostRegistrationPlan {
   const accountHome = safeAccountHome(platform);
   const common = {
@@ -40,7 +41,8 @@ export function currentNativeHostRegistrationPlan(
     firefoxExtensionIds: [FIREFOX_EXTENSION_ID],
     ...(chromiumExtensionOrigins && chromiumExtensionOrigins.length > 0
       ? { chromiumExtensionOrigins }
-      : {})
+      : {}),
+    ...(platform === "linux" && chromeFlatpak ? { chromeFlatpak: true } : {})
   };
   if (platform === "win32") {
     const executable = process.execPath;
@@ -112,10 +114,22 @@ export function nativeCallerPolicy(
   };
 }
 
+async function nativeHostManifestFileExists(manifestPath: string): Promise<boolean> {
+  try {
+    await lstat(manifestPath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 /**
  * Chrome development identities are authorized only when the per-user
  * installer created the byte-exact manifest for that exact caller origin.
  * Production builds use the same path with the permanent Web Store origin.
+ * A Chrome Flatpak enrollment writes its manifest inside the sandbox's own
+ * directory, so the exact-manifest authority is whichever file is present.
  */
 export async function nativeCallerPolicyFromInstalledRegistration(
   argv: readonly string[]
@@ -125,9 +139,15 @@ export async function nativeCallerPolicyFromInstalledRegistration(
   if (!/^chrome-extension:\/\/[a-p]{32}\/$/u.test(first)) {
     throw new Error("The Chrome extension origin is invalid.");
   }
-  const plan = currentNativeHostRegistrationPlan(process.platform, [first]);
-  const chrome = plan.manifests.find((manifest) => manifest.browser === "chrome");
-  if (!chrome) throw new Error("The Chrome native host registration is unavailable.");
-  await assertExactOwnedManifest(chrome);
-  return nativeCallerPolicy(argv, plan);
+  const variants = process.platform === "linux" ? [false, true] : [false];
+  for (const chromeFlatpak of variants) {
+    const plan = currentNativeHostRegistrationPlan(process.platform, [first], chromeFlatpak);
+    const chrome = plan.manifests.find((manifest) => manifest.browser === "chrome");
+    if (!chrome) throw new Error("The Chrome native host registration is unavailable.");
+    if (await nativeHostManifestFileExists(chrome.path)) {
+      await assertExactOwnedManifest(chrome);
+      return nativeCallerPolicy(argv, plan);
+    }
+  }
+  throw new Error("The installed Chrome native host manifest is missing or does not match this BrowseWeave runtime.");
 }

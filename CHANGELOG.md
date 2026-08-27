@@ -6,6 +6,11 @@ The format follows Keep a Changelog, and releases use semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Guided setup now detects and supports Mozilla Firefox as a first-class browser target. Firefox was already the extension family Zen builds on, so the firefox-mv2 extension, native host manifest, and daemon pairing side were ready; what was missing was launcher discovery and the `--browser firefox` path. Setup now finds Firefox in the standard location of each platform (`/usr/bin/firefox` and `/usr/bin/firefox-esr` on Linux, `/Applications/Firefox.app` on macOS, and the Mozilla Firefox program directory on Windows), `--browser firefox` and `--browser-path` accept a Firefox target, and the setup page shows Firefox-specific labels and the about:debugging temporary add-on instruction. Firefox installed as a Flatpak or Snap is not yet detected in this pass.
+- Guided setup on Linux now supports Google Chrome installed as a Flatpak. The sandbox cannot read the per-user launcher or the home extension folder, so setup keeps the managed extension copy in `~/.var/app/com.google.Chrome/browseweave`, registers the Chrome native-messaging manifest inside the sandbox's own `NativeMessagingHosts` directory, and installs a managed wrapper there that reaches the unchanged per-user host launcher through `flatpak-spawn --host`. The wrapper follows the same marker-and-digest discipline as the host launcher, byte-exact or refused, and the reconnect caller still authorizes only the exact unpacked extension origin saved in the manifest. Because the spawn grant is the owner's sandbox decision, setup never adds it itself: when the Flatpak permission is missing it prints the one-time `flatpak override --user --talk-name=org.freedesktop.Flatpak com.google.Chrome` command for the owner to run, and pairing works without it. Repair refreshes the sandbox extension copy beside the regular one, and uninstall and `--purge-data` now cover both locations.
+
 ## [0.1.0-beta.17] - 2026-08-18
 
 Published under the npm `beta` and `latest` dist-tags. No Chrome Web Store or Mozilla Add-ons release is claimed.
