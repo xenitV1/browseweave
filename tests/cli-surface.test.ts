@@ -101,7 +101,7 @@ describe("public CLI surface", () => {
       maxBuffer: 64 * 1024
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toMatch(/firefox-mv2\/$/u);
+    expect(result.stdout.trim()).toMatch(/[\\/]firefox-mv2[\\/]$/u);
   });
 
   it("refuses a duplicate all-browser selection before starting setup", () => {
