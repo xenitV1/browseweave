@@ -100,7 +100,7 @@
   },
   "devDependencies": {
     "@types/firefox-webext-browser": "143.0.0",
-    "@types/node": "26.1.2",
+    "@types/node": "26.4.0",
     "@types/webextension-polyfill": "0.12.5",
     "@types/ws": "8.18.1",
     "esbuild": "0.28.1",
